@@ -2,6 +2,7 @@
   "name": "nearcaster",
   "private": true,
   "version": "0.1.0",
+  "license": "MIT",
   "description": "Farcaster mini app: friends-of-friends graph in D3 (Vizster lineage, LeafGraph layout)",
   "type": "module",
   "scripts": {
