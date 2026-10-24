@@ -4,6 +4,15 @@ A Farcaster mini app that draws the viewer's friends-of-friends graph in D3. It 
 
 TypeScript 7, Vite 8, D3 7.9, `@farcaster/miniapp-sdk` 0.3.0. No native code.
 
+## Origins
+
+Inspired originally by the [Vizster](https://jheer.org/vizster/) project, by [Jeffrey Heer](https://jheer.org) and [danah boyd](https://www.danah.org/), which visualized [Friendster](https://en.wikipedia.org/wiki/Friendster). I tweaked over the years and deployed as an ontology visualizer in the [DeepMuse](https://www.deepmuse.com/) project. Vibe coded to take elements from each.
+
+- Vizster: [project page](https://jheer.org/vizster/) · [paper, IEEE InfoVis 2005](https://idl.uw.edu/papers/vizster) · [download, BSD license](https://homes.cs.washington.edu/~jheer/projects/vizster/download.html) · built on [prefuse](https://github.com/prefuse/Prefuse)
+- Jeffrey Heer: [jheer.org](https://jheer.org) · [GitHub](https://github.com/jheer)
+- DeepMuse: [deepmuse.com](https://www.deepmuse.com/) · [GitHub](https://github.com/musesum/DeepMuse) · ontology [MuFlo](https://github.com/musesum/MuFlo), earlier [Tr3](https://github.com/musesum/Tr3) · graph view [MuMenu `flod3-embed.html`](https://github.com/musesum/MuMenu/blob/main/Sources/MuMenu/Resources/flod3-embed.html)
+- NearCaster: [GitHub](https://github.com/musesum/NearCaster) · [nearcaster.pages.dev](https://nearcaster.pages.dev)
+
 ## Run
 
 ```bash
