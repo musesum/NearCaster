@@ -95,7 +95,7 @@ Cost: one load for fid 3 (dwr) took about 6 to 13 s and about 16 MB. The links a
 | `solveFit` chokepoint, settle then 420 ms flight, `fitField` (never past 1:1) | `Layout.solveFit`: sync settle from alpha 0.3, cubic ease-in-out flight, camera fit |
 | Calm: highlight and selection move 0 px | paint-only paths; measured 0.000 px on select and on Context |
 | No-op rebuild guard (visible ids + link wires) | signature guard in `reheatLocal` / `bindQuiet` |
-| `reheatAlpha` (alphaTarget 0.12 for 300 ms), `freezeFar`, `thawWhenCold` | the same, used by Expand and the community-pull slider |
+| `reheatAlpha` (alphaTarget 0.12 for 300 ms), `freezeFar`, `thawWhenCold` | the same, used by Expand; the community-pull slider re-solves from the radial seed instead, since repeated reheats folded the bands to one side of the ego |
 | Forces guardIn, charge −50/240/θ0.9, link (tree 2.4, edges 0.8 ÷ min degree, 3 iterations, cap 2.6), voro, polar, guardOut | the same order; plus community pull 0.08 and radial bands |
 | Voronoi capsule separation instead of forceCollide | Delaunay-neighbour circle separation; drag moves only contact neighbours |
 | v3e guards: VEL_MAX 10000, non-finite repair, guards at both ends | `guardForce()` registered first and last |

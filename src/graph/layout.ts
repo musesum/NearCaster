@@ -2,7 +2,8 @@
 // Calm contract:
 // - structure changes go through solveFit(): settle synchronously from alpha <= 0.3, then fly 420 ms
 // - selection, hover, and search move 0 px (paint only)
-// - local edits (expand, sliders) seed newcomers beside their dad, freeze the far field, reheatAlpha()
+// - local edits (expand) seed newcomers beside their dad, freeze the far field, reheatAlpha()
+// - community pull re-solves from the radial seed (Focus: reheatAlpha), so a value always gives one layout
 // - alpha rises only in reheatAlpha() (alphaTarget 0.12 for 300 ms); never alpha 1, never a timer loop
 // - no-op guard: identical visible ids + link wires => nothing to do
 // - forces: guardIn, charge, link, voro, comm, ring, polar, guardOut; ego pinned at (0,0)
@@ -72,6 +73,8 @@ type Snap = { pos: Map<string, [number, number]>; base: Map<string, Polar> };
 export class Layout {
   readonly sim: d3.Simulation<SimNode, SimLink>;
   pull = TUNE.commPull;
+  // The pull the All/Context layout was last solved at (a Focus-time change applies on exit).
+  private solvedPull = TUNE.commPull;
   focusMode = false;
   private all: SimNode[] = [];
   private vis: SimNode[] = [];
@@ -115,10 +118,26 @@ export class Layout {
     this.all = all;
   }
 
+  // Reheats walked the bands around the ego: follow links stretched across a band fold it toward one side,
+  // and each reheat folded it further. A re-solve from the seed cannot accumulate; the camera stays.
   setPull(v: number): void {
+    if (v === this.pull) return;
     this.pull = v;
-    this.installForces();
-    this.reheatAlpha();
+    if (this.focusMode) {
+      this.installForces();
+      this.reheatAlpha();
+      return;
+    }
+    this.resolvePull();
+  }
+
+  private resolvePull(): void {
+    const from = new Map(this.all.map((n) => [n, [n.x ?? 0, n.y ?? 0] as [number, number]]));
+    // An expand's frozen far field is not a pin: it seeds like the rest.
+    this.thawFar();
+    this.seedRadial();
+    this.base.clear();
+    this.solveFit(this.vis, this.links, () => undefined, from);
   }
 
   // Deterministic radial seed: hop 1 on a ring sorted by community, deeper hops fanned around their dad.
@@ -135,11 +154,13 @@ export class Layout {
     ring.forEach((n, i) => {
       const th = -Math.PI / 2 + (2 * Math.PI * i) / Math.max(1, ring.length);
       n.seedAngle = th;
+      // A pinned node holds its place (a pull re-solve keeps drops and expands).
+      if (n.pinned) return;
       n.x = this.r1 * Math.cos(th);
       n.y = this.r1 * Math.sin(th);
       n.vx = n.vy = 0;
     });
-    this.seedEntering(this.all.filter((n) => n.hop >= 2).map((n) => ((n.x = undefined), n)));
+    this.seedEntering(this.all.filter((n) => n.hop >= 2 && !n.pinned).map((n) => ((n.x = undefined), n)));
   }
 
   // seedEntering (P:1961-1988), adapted to bands: unplaced nodes fan out on their own band,
@@ -167,9 +188,10 @@ export class Layout {
   }
 
   // The one recalc chokepoint: settle the visible set synchronously, then fly there.
-  solveFit(vis: SimNode[], links: SimLink[], fit: (target: Map<SimNode, [number, number]>) => void): void {
+  // `from` = where the flight starts when the caller re-seeded first.
+  solveFit(vis: SimNode[], links: SimLink[], fit: (target: Map<SimNode, [number, number]>) => void, from?: Map<SimNode, [number, number]>): void {
     this.flightAbort();
-    const from = new Map(this.all.map((n) => [n, [n.x ?? 0, n.y ?? 0] as [number, number]]));
+    from ??= new Map(this.all.map((n) => [n, [n.x ?? 0, n.y ?? 0] as [number, number]]));
     this.thawFar();
     // Seed before bind: d3's initializeNodes would otherwise spiral-place unplaced nodes.
     this.seedEntering(vis);
@@ -179,7 +201,10 @@ export class Layout {
     for (let i = 0; i < SOLVE_TICKS && this.sim.alpha() >= ALPHA_MIN; i++) this.sim.tick();
     this.sim.alpha(0).stop();
     for (const n of vis) n.vx = n.vy = 0;
-    if (!this.focusMode) this.captureBase();
+    if (!this.focusMode) {
+      this.captureBase();
+      this.solvedPull = this.pull;
+    }
     const to = new Map(vis.map((n) => [n, [n.x!, n.y!] as [number, number]]));
     fit(to);
     this.fly(from, to);
@@ -237,6 +262,7 @@ export class Layout {
     this.bind(vis, links);
     const to = new Map(vis.map((n) => [n, [n.x!, n.y!] as [number, number]]));
     this.fly(from, to);
+    if (this.pull !== this.solvedPull) this.resolvePull();
   }
 
   togglePin(n: SimNode): void {

@@ -398,9 +398,12 @@ function wireControls(view: GraphView, recenter: (target: string) => void): () =
   const pull = $<HTMLInputElement>('pull');
   pull.value = String(view.pull);
   $('pullVal').textContent = view.pull.toFixed(2);
+  // Each value re-solves the whole layout, so a drag or a held key solves once it stops for 150 ms.
+  let pullT = 0;
   pull.addEventListener('input', () => {
     $('pullVal').textContent = Number(pull.value).toFixed(2);
-    view.setPull(Number(pull.value));
+    clearTimeout(pullT);
+    pullT = window.setTimeout(() => view.setPull(Number(pull.value)), 150);
   });
 
   $('fidForm').addEventListener('submit', (e) => {
