@@ -1,0 +1,524 @@
+:root {
+  --bg: #0e0f14;
+  --panel: #171922;
+  --panel-2: #1f2230;
+  --line: #2b2f40;
+  --ink: #e8e9f0;
+  --ink-2: #a3a7ba;
+  --ink-3: #6c7086;
+  --accent: #8a63d2;
+  --hit: #ffee99;
+  --hit-ink: #000;
+  --aura: rgba(255, 224, 128, 0.91);
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--ink);
+  font: 14px/1.35 -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, sans-serif;
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+#app {
+  position: fixed;
+  inset: 0;
+  padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left);
+  display: flex;
+  flex-direction: column;
+}
+
+#bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  z-index: 3;
+}
+
+#brand {
+  font-weight: 650;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+#brand .dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px rgba(138, 99, 210, 0.25);
+}
+
+#search {
+  flex: 1;
+  min-width: 0;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  border-radius: 8px;
+  padding: 6px 9px;
+  font: inherit;
+}
+
+#search.bad {
+  border-color: #c55;
+}
+
+#count {
+  color: var(--ink-3);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+button {
+  font: inherit;
+  color: var(--ink);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+
+button:active {
+  transform: translateY(1px);
+}
+
+button.icon {
+  width: 34px;
+  height: 32px;
+  padding: 0;
+  font-size: 16px;
+  line-height: 1;
+}
+
+#controls {
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  padding: 8px 12px 10px;
+  display: grid;
+  gap: 8px;
+  z-index: 3;
+  max-height: 55vh;
+  overflow: auto;
+}
+
+#controls .row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+#controls .row.small {
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+#controls label {
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+#controls input[type='range'] {
+  flex: 1;
+  max-width: 220px;
+  accent-color: var(--accent);
+}
+
+#fidForm {
+  display: flex;
+  gap: 6px;
+}
+
+#fidForm input {
+  width: 110px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  border-radius: 8px;
+  padding: 5px 8px;
+  font: inherit;
+}
+
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  overflow: hidden;
+}
+
+.seg button {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink-2);
+  padding: 5px 9px;
+  font-size: 13px;
+}
+
+.seg button.on {
+  background: var(--accent);
+  color: #fff;
+}
+
+#stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+#graph {
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.status {
+  position: absolute;
+  left: 50%;
+  top: 40%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  color: var(--ink-2);
+  max-width: 80%;
+  pointer-events: none;
+}
+
+.status .bar {
+  margin: 10px auto 0;
+  width: 180px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--panel-2);
+  overflow: hidden;
+}
+
+.status .bar i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.2s;
+}
+
+.status.error {
+  color: #f0a0a0;
+  pointer-events: auto;
+}
+
+#legend {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  max-width: calc(100% - 64px);
+  font-size: 11px;
+  color: var(--ink-2);
+  pointer-events: none;
+}
+
+#legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+#legend i {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.fab {
+  position: absolute;
+  right: 10px;
+  bottom: calc(10px + var(--cover, 0px));
+  border-radius: 50% !important;
+  width: 40px !important;
+  height: 40px !important;
+  background: var(--panel) !important;
+}
+
+/* Graph */
+.link {
+  stroke: #8890a8;
+  stroke-opacity: 0.22;
+  fill: none;
+}
+
+.link.mutual {
+  stroke-opacity: 0.45;
+}
+
+.link.ego {
+  stroke: var(--accent);
+  stroke-opacity: 0.35;
+}
+
+.link.hit {
+  stroke: var(--hit);
+  stroke-opacity: 0.75;
+  stroke-width: 1.5px;
+}
+
+.link.dim {
+  stroke-opacity: 0.05;
+}
+
+.node circle.body {
+  stroke: rgba(0, 0, 0, 0.55);
+  stroke-width: 1px;
+}
+
+.node .aura {
+  fill: none;
+  stroke: var(--aura);
+  stroke-width: 3px;
+  visibility: hidden;
+}
+
+.node.focus .aura {
+  visibility: visible;
+}
+
+.node.hit circle.body {
+  fill: var(--hit) !important;
+}
+
+/* Vizster connectivity: hop 1 orange, hop 2 yellow rings around the lit node. */
+.node.near1 circle.body {
+  stroke: #ff8c42;
+  stroke-width: 2.5px;
+}
+
+.node.near2 circle.body {
+  stroke: #ffd56b;
+  stroke-width: 1.5px;
+}
+
+.node.pinned circle.body {
+  stroke: #fff;
+  stroke-dasharray: 2 2;
+  stroke-width: 1.5px;
+}
+
+.node {
+  cursor: pointer;
+}
+
+.node.dim {
+  opacity: 0.18;
+}
+
+.node.faint {
+  opacity: 0.5;
+}
+
+.node text {
+  font-size: 10px;
+  fill: var(--ink);
+  paint-order: stroke;
+  stroke: rgba(14, 15, 20, 0.85);
+  stroke-width: 3px;
+  pointer-events: all;
+}
+
+.node.hit text {
+  fill: var(--hit-ink);
+  stroke: var(--hit);
+}
+
+.node .initials {
+  font-size: 9px;
+  font-weight: 650;
+  fill: rgba(0, 0, 0, 0.7);
+  stroke: none;
+  text-anchor: middle;
+  dominant-baseline: central;
+  pointer-events: none;
+}
+
+/* LeafGraph v2e: fill and stroke at full alpha, group opacity 0.10, so overlaps never double-composite. */
+.hulls {
+  opacity: 0.1;
+}
+
+/* Taps on hulls and links fall through to the background (deselect). */
+.hulls,
+.links {
+  pointer-events: none;
+}
+
+#graph.xray image.avatar {
+  display: none;
+}
+
+.hull {
+  stroke-width: 36px;
+  stroke-linejoin: round;
+}
+
+/* Profile panel (Vizster profile view) */
+#panel {
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  width: min(300px, calc(100% - 16px));
+  max-height: calc(100% - 16px);
+  overflow: auto;
+  background: rgba(23, 25, 34, 0.96);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+  z-index: 4;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
+}
+
+#panel .head {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+#panel img,
+#panel .ph {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--panel-2);
+  flex: none;
+}
+
+#panel .name {
+  font-weight: 650;
+  font-size: 15px;
+}
+
+#panel .user {
+  color: var(--ink-2);
+}
+
+#panel .bio {
+  margin: 8px 0;
+  color: var(--ink-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+#panel .stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 10px;
+  font-size: 12px;
+  color: var(--ink-2);
+  margin: 8px 0;
+}
+
+#panel .stats b {
+  color: var(--ink);
+}
+
+#panel .chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 6px 0;
+}
+
+#panel .chip {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  cursor: pointer;
+}
+
+#panel .actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+#panel .actions button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+#panel .close {
+  position: absolute;
+  right: 6px;
+  top: 6px;
+  border: 0;
+  background: transparent;
+  color: var(--ink-3);
+}
+
+#panel h4 {
+  margin: 10px 0 4px;
+  font-size: 12px;
+  color: var(--ink-3);
+  font-weight: 600;
+}
+
+#toast {
+  position: absolute;
+  left: 50%;
+  bottom: 56px;
+  transform: translateX(-50%);
+  max-width: calc(100% - 32px);
+  background: rgba(23, 25, 34, 0.94);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--ink-2);
+  pointer-events: none;
+  z-index: 5;
+}
+
+@media (max-width: 520px) {
+  #brand .label {
+    display: none;
+  }
+  #panel {
+    left: 8px;
+    right: 8px;
+    width: auto;
+    top: auto;
+    bottom: 8px;
+    max-height: 48%;
+  }
+}

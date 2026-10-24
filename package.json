@@ -1,0 +1,23 @@
+{
+  "name": "nearcaster",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Farcaster mini app: friends-of-friends graph in D3 (Vizster lineage, LeafGraph layout)",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test tests/*.test.ts"
+  },
+  "dependencies": {
+    "@farcaster/miniapp-sdk": "^0.3.0",
+    "d3": "^7.9.0"
+  },
+  "devDependencies": {
+    "@types/d3": "^7.4.3",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5"
+  }
+}
