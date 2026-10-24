@@ -348,7 +348,6 @@ function wireControls(view: GraphView, recenter: (target: string) => void): () =
   menuBtn.addEventListener('click', () => {
     controls.hidden = !controls.hidden;
     menuBtn.setAttribute('aria-expanded', String(!controls.hidden));
-    requestAnimationFrame(() => view.resize());
   });
 
   const seg = (id: string, attr: string, run: (v: string) => void) => {

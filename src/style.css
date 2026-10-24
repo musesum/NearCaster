@@ -119,14 +119,20 @@ button.icon {
   line-height: 1;
 }
 
+/* Lies over the top of the graph: opening it leaves the stage size, so the graph never moves. */
 #controls {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
   background: var(--panel);
   border-bottom: 1px solid var(--line);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
   padding: 8px 12px 10px;
   display: grid;
   gap: 8px;
-  z-index: 3;
-  max-height: 55vh;
+  z-index: 5;
+  max-height: min(55vh, 100%);
   overflow: auto;
 }
 
