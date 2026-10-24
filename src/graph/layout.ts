@@ -230,7 +230,9 @@ export class Layout {
       n.fy = n.pinned ? n.y : null;
       n.vx = n.vy = 0;
     }
+    // A capture queued by a Focus-time reheat would overwrite the restored base.
     this.base = new Map(snap.base);
+    this.baseWant = false;
     this.seedEntering(vis);
     this.bind(vis, links);
     const to = new Map(vis.map((n) => [n, [n.x!, n.y!] as [number, number]]));
