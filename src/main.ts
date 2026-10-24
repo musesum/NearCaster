@@ -3,9 +3,11 @@ import { connectHost, type Host } from './host.ts';
 import { crawlEgo, expandNode, DEFAULT_BUDGET, type FollowSet } from './data/crawl.ts';
 import { sampleProvider, SAMPLE_EGO_FID } from './data/sample.ts';
 import { HttpError, snapchainProvider } from './data/snapchain.ts';
-import type { DataProvider, EgoGraph, GNode } from './data/types.ts';
-import { GraphView, type LinkFilter, type Mode, type Xray } from './graph/view.ts';
+import { idOf, type DataProvider, type EgoGraph, type GNode } from './data/types.ts';
+import { GraphView, type LinkShow, type Mode, type Xray } from './graph/view.ts';
 import { Panel } from './ui/panel.ts';
+import { Peek } from './ui/peek.ts';
+import { parseCenter } from './ui/center.ts';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -25,6 +27,8 @@ class EmptyGraphError extends Error {}
 const handleOf = (n: GNode) => (n.username.startsWith('fid:') ? `fid ${n.fid}` : `@${n.username}`);
 
 async function boot(): Promise<void> {
+  // Inside a client the handshake can take a few seconds after a reload.
+  setStatus('Connecting…', 0);
   const host = await connectHost();
   applyInsets(host);
   // Splash off as soon as the shell paints; crawl progress shows in-app.
@@ -35,15 +39,78 @@ async function boot(): Promise<void> {
   const provider = wantSample ? sampleProvider() : snapchainProvider({ base: import.meta.env.VITE_HUB_URL || undefined });
   const state: State = { host, provider, loading: false, expanding: false };
 
+  const peek = new Peek($('peek'), $('stage'));
+  let peekId: string | undefined;
+  // An open profile sheet follows the finger: the account it showed before, the last one it browsed, and the graph.
+  let browseFrom: string | undefined;
+  let browsed: string | undefined;
+  let browseGraph: EgoGraph | undefined;
   const view = new GraphView($('graph') as unknown as SVGSVGElement, {
     onSelect: (node) => select(node),
     onExpand: (node) => void expand(node),
     onBackground: () => hidePanel(),
+    onPeek: (node, at, lifted) => {
+      if (!at) {
+        peek.hide();
+        peekId = undefined;
+        endBrowse(lifted === true);
+        return;
+      }
+      if (!node || !state.graph) {
+        peek.hide();
+        peekId = undefined;
+        return;
+      }
+      if (node.id !== peekId) {
+        // One tick per node crossed, like a picker detent.
+        host.haptic();
+        if (panel.openId) browse(node, state.graph);
+      }
+      peekId = node.id;
+      peek.show(node, state.graph, view.communityColor, at);
+    },
   });
 
   function hidePanel(): void {
     panel.hide();
     cover(0);
+  }
+
+  // The sheet's height holds while browsing (a longer profile scrolls), so its edge, the cover and the fit button stay put.
+  function browse(node: GNode, graph: EgoGraph): void {
+    if (!browseFrom) {
+      browseFrom = panel.openId;
+      browseGraph = graph;
+      $('panel').style.height = `${$('panel').offsetHeight}px`;
+    }
+    browsed = node.id;
+    panel.show(node, graph, view.communityColor);
+  }
+
+  // Forgets a browse without touching the sheet's content.
+  function dropBrowse(): void {
+    browseFrom = browsed = browseGraph = undefined;
+    $('panel').style.height = '';
+  }
+
+  // A clean lift selects the account the sheet shows; a second finger or a cancel puts the sheet back.
+  // A sheet closed, or a graph replaced, during the browse is left as it is.
+  function endBrowse(lifted: boolean): void {
+    const from = browseFrom;
+    const last = browsed;
+    const graph = browseGraph;
+    dropBrowse();
+    if (!from || !panel.openId || graph !== state.graph) return;
+    const id = lifted ? last : from;
+    const pick = state.graph?.nodes.find((x) => x.id === id);
+    if (!pick || !state.graph) return hidePanel();
+    if (id === from) {
+      panel.show(pick, state.graph, view.communityColor);
+      syncCover();
+      return;
+    }
+    select(pick);
+    view.focus(pick.id, false);
   }
 
   // Stage pixels under the bottom sheet: fits frame above it, the fit button rides above it.
@@ -103,14 +170,50 @@ async function boot(): Promise<void> {
       return;
     }
     host.haptic();
+    // A selection from elsewhere (an expand landing, a Focus tap) ends a browse in progress.
+    dropBrowse();
     panel.show(node, state.graph, view.communityColor);
+    const top = syncCover();
+    if (top !== undefined) view.reveal(node.id, top);
+  }
+
+  // Phone-width bottom sheet: covers the stage from its top edge (returned); the side panel covers nothing.
+  function syncCover(): number | undefined {
     const sheet = $('panel').getBoundingClientRect();
     const isSheet = sheet.width >= window.innerWidth - 40;
     cover(isSheet ? $('stage').getBoundingClientRect().bottom - sheet.top : 0);
-    if (isSheet) view.reveal(node.id, sheet.top);
+    return isSheet ? sheet.top : undefined;
   }
 
-  const runSearch = wireControls(view, (fid) => void load(fid));
+  // Center on: a fid, or a username resolved through the data source.
+  async function centerOn(raw: string): Promise<void> {
+    if (state.loading) return;
+    const t = parseCenter(raw);
+    if (!t) {
+      toast('Enter a fid or a @username');
+      return;
+    }
+    if ('fid' in t) return load(t.fid);
+    try {
+      const fid = await state.provider.fidByName(t.name);
+      if (fid) await load(fid);
+      else toast(`No Farcaster account named @${t.name}`);
+    } catch (e) {
+      toast(`Lookup failed: ${(e as Error).message}`);
+    }
+  }
+
+  // My network: back to the signed-in account; shown only while the graph is centred on someone else.
+  const meBtn = $('meBtn');
+  const syncMe = () => {
+    const me = host.user;
+    meBtn.hidden = !me || !state.graph || state.provider.name === 'sample' || state.graph.egoId === idOf(me.fid);
+  };
+  meBtn.addEventListener('click', () => {
+    if (host.user) void load(host.user.fid, host.user);
+  });
+
+  const runSearch = wireControls(view, (raw) => void centerOn(raw));
   // Dev-only probe for harness checks.
   if (import.meta.env.DEV) (window as unknown as { __nc: unknown }).__nc = { view, state };
 
@@ -162,6 +265,7 @@ async function boot(): Promise<void> {
       } else setStatus(msg, undefined, true);
     } finally {
       state.loading = false;
+      syncMe();
     }
   }
 
@@ -207,11 +311,11 @@ function sourceCaption(g: EgoGraph): void {
   const friends = g.nodes.filter((n) => n.hop === 1).length;
   const fof = g.nodes.filter((n) => n.hop >= 2).length;
   const comms = new Set(g.nodes.map((n) => n.community).filter((c) => c >= 0)).size;
-  $('source').textContent = `${friends} follows · ${fof} friends of friends · ${g.links.length} links · ${comms} communities · source ${g.provider}${g.truncated.length ? ` · ${g.truncated.join('; ')}` : ''}`;
+  $('source').textContent = `${friends} in your circle · ${fof} friends of friends · ${g.links.length} links · ${comms} communities · source ${g.provider}${g.truncated.length ? ` · ${g.truncated.join('; ')}` : ''}`;
 }
 
 // Returns the search runner so a new or grown graph re-applies the query.
-function wireControls(view: GraphView, recenter: (fid: number) => void): () => void {
+function wireControls(view: GraphView, recenter: (target: string) => void): () => void {
   const menuBtn = $('menuBtn');
   const controls = $('controls');
   menuBtn.addEventListener('click', () => {
@@ -231,7 +335,24 @@ function wireControls(view: GraphView, recenter: (fid: number) => void): () => v
   };
   seg('mode', 'mode', (v) => view.setMode(v as Mode));
   seg('xray', 'xray', (v) => view.setXray(v as Xray));
-  seg('links', 'links', (v) => view.setLinkFilter(v as LinkFilter));
+  // Links row: All turns every direction on; each direction toggles itself.
+  const links = $('links');
+  const show: LinkShow = { mutual: true, following: true, follows: true };
+  const kinds = Object.keys(show) as Array<keyof LinkShow>;
+  links.addEventListener('click', (e) => {
+    const b = (e.target as HTMLElement).closest('button');
+    if (!b) return;
+    const k = b.dataset.links as keyof LinkShow | 'all';
+    if (k === 'all') for (const x of kinds) show[x] = true;
+    else show[k] = !show[k];
+    links.querySelectorAll('button').forEach((x) => {
+      const v = x.dataset.links as keyof LinkShow | 'all';
+      const on = v === 'all' ? kinds.every((y) => show[y]) : show[v];
+      x.classList.toggle('on', on);
+      x.setAttribute('aria-pressed', String(on));
+    });
+    view.setLinkShow(show);
+  });
 
   const depth = $<HTMLInputElement>('depth');
   depth.addEventListener('input', () => {
@@ -251,9 +372,7 @@ function wireControls(view: GraphView, recenter: (fid: number) => void): () => v
 
   $('fidForm').addEventListener('submit', (e) => {
     e.preventDefault();
-    const fid = Number($<HTMLInputElement>('fid').value);
-    if (Number.isInteger(fid) && fid > 0) recenter(fid);
-    else toast('A fid is a whole number above 0');
+    recenter($<HTMLInputElement>('fid').value);
   });
 
   const search = $<HTMLInputElement>('search');

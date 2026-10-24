@@ -41,8 +41,10 @@
         <div class="row">
           <label>Links</label>
           <div class="seg" id="links">
-            <button data-links="all" class="on">All</button>
-            <button data-links="mutual">Mutual only</button>
+            <button data-links="all" class="on" aria-pressed="true">All</button>
+            <button data-links="mutual" class="on" aria-pressed="true"><i class="tie mutual"></i>Mutual</button>
+            <button data-links="following" class="on" aria-pressed="true"><i class="tie out"></i>Following</button>
+            <button data-links="follows" class="on" aria-pressed="true"><i class="tie in"></i>Follows</button>
           </div>
         </div>
         <div class="row">
@@ -54,8 +56,8 @@
           <input id="pull" type="range" min="0" max="0.3" step="0.01" />
         </div>
         <div class="row">
-          <label for="fid">Center on fid</label>
-          <form id="fidForm"><input id="fid" inputmode="numeric" placeholder="e.g. 3" /><button type="submit">Go</button></form>
+          <label for="fid">Center on fid or @username</label>
+          <form id="fidForm"><input id="fid" placeholder="3 or @dwr" autocapitalize="off" autocorrect="off" spellcheck="false" /><button type="submit">Go</button></form>
         </div>
         <div class="row small" id="source"></div>
       </section>
@@ -65,7 +67,9 @@
         <div id="toast" hidden></div>
         <div id="legend"></div>
         <button id="fitBtn" class="icon fab" aria-label="Fit graph">⤢</button>
+        <button id="meBtn" hidden>My network</button>
         <aside id="panel" hidden></aside>
+        <div id="peek" hidden></div>
       </main>
     </div>
     <script type="module" src="/src/main.ts"></script>

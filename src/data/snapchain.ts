@@ -22,14 +22,18 @@ export function snapchainProvider(opts: SnapchainOptions = {}): DataProvider {
     return { res: await getJson<LinkResponse>(`${base}/v1/${path}?${q}`) };
   };
 
-  const toPage = (res: LinkResponse, pick: (m: LinkMessage) => number | undefined): Page => {
+  // The node sends a token even on the last page ("[null,null]", which serves that page again):
+  // a short page, or a token equal to the one just sent, ends the list.
+  const toPage = (res: LinkResponse, cursor: string | undefined, pick: (m: LinkMessage) => number | undefined): Page => {
     const fids: number[] = [];
     for (const m of res.messages ?? []) {
       if (m.data?.linkBody?.type !== 'follow') continue;
       const f = pick(m);
       if (typeof f === 'number') fids.push(f);
     }
-    return { fids, next: res.nextPageToken || undefined };
+    const token = res.nextPageToken;
+    const more = !!token && token !== cursor && (res.messages?.length ?? 0) >= pageSize;
+    return { fids, next: more ? token : undefined };
   };
 
   const profile = async (fid: number): Promise<User | undefined> => {
@@ -61,11 +65,11 @@ export function snapchainProvider(opts: SnapchainOptions = {}): DataProvider {
     name: 'snapchain',
     async following(fid, cursor) {
       const { res } = await links('linksByFid', 'fid', fid, cursor);
-      return toPage(res, (m) => m.data?.linkBody?.targetFid);
+      return toPage(res, cursor, (m) => m.data?.linkBody?.targetFid);
     },
     async followers(fid, cursor) {
       const { res } = await links('linksByTargetFid', 'target_fid', fid, cursor);
-      return toPage(res, (m) => m.data?.fid);
+      return toPage(res, cursor, (m) => m.data?.fid);
     },
     async users(fids) {
       const out: User[] = [];
@@ -83,6 +87,16 @@ export function snapchainProvider(opts: SnapchainOptions = {}): DataProvider {
       };
       await Promise.all(Array.from({ length: Math.min(profileConcurrency, fids.length) }, worker));
       return out;
+    },
+    async fidByName(name) {
+      try {
+        const r = await getJson<{ fid?: number }>(`${base}/v1/userNameProofByName?${new URLSearchParams({ name })}`);
+        return typeof r.fid === 'number' && r.fid > 0 ? r.fid : undefined;
+      } catch (err) {
+        // The node answers 400 for a name with no proof.
+        if (err instanceof HttpError && err.status < 500) return undefined;
+        throw err;
+      }
     },
   };
 }

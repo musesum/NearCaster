@@ -11,7 +11,7 @@ export type PanelActions = {
   close(): void;
 };
 
-const HOP_TEXT = ['You', 'You follow', 'Friend of a friend', 'Further out'];
+const HOP_TEXT = ['You', 'Your circle', 'Friend of a friend', 'Further out'];
 
 export class Panel {
   private el: HTMLElement;
@@ -89,13 +89,17 @@ export class Panel {
     stat('Following', node.followingCount?.toLocaleString());
     stat('Ring', HOP_TEXT[node.hop]);
     stat('Community', node.community >= 0 ? `#${node.community + 1}` : '—');
-    if (node.hop > 0) stat('Follows you back', node.mutualWithEgo ? 'yes' : 'no');
+    if (node.hop > 0) {
+      const said = (v?: boolean) => (v === undefined ? 'not read' : v ? 'yes' : 'no');
+      stat('You follow', said(node.egoFollows));
+      stat('Follows you', said(node.followsEgo));
+    }
     stat('Links here', ins.length + outs.length);
     el.append(stats);
 
     if (friendsIn.length) {
       const n = friendsIn.length;
-      el.append(text('h4', '', node.hop === 0 ? `${n} of your follows follow you back` : node.hop === 1 ? `Also followed by ${n} of your follows` : `Followed by ${n} of your follows`));
+      el.append(text('h4', '', node.hop === 0 ? `${n} in your circle follow you` : node.hop === 1 ? `Also followed by ${n} in your circle` : `Followed by ${n} in your circle`));
       const chips = div('chips');
       for (const f of friendsIn.sort((a, b) => (b.followerCount ?? 0) - (a.followerCount ?? 0)).slice(0, 12)) {
         chips.append(button(f.displayName || f.username, 'chip', () => this.actions.focus(f.id)));
@@ -103,11 +107,11 @@ export class Panel {
       el.append(chips);
     }
 
-    // The ego's panel lists who is near: accounts you don't follow, ranked by how many of your follows follow them.
+    // The ego's panel lists who is near: friends of friends, ranked by how many in your circle follow them.
     if (node.hop === 0) {
       const picks = nearYou(graph);
       if (picks.length) {
-        el.append(text('h4', '', 'Near you: followed by your follows'));
+        el.append(text('h4', '', 'Near you: followed by your circle'));
         const chips = div('chips');
         for (const p of picks) chips.append(button(`${p.node.displayName || p.node.username} · ${p.via.length}`, 'chip', () => this.actions.focus(p.node.id)));
         el.append(chips);

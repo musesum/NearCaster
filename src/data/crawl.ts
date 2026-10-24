@@ -1,15 +1,15 @@
 // Ego-network crawl: ego -> friends (hop 1) -> friends-of-friends (hop 2), within fetch budgets.
 import { louvain, type WEdge } from '../graph/community.ts';
-import { idOf, type DataProvider, type EgoGraph, type GLink, type GNode, type Hop, type Page, type User } from './types.ts';
+import { fidOf, idOf, type DataProvider, type EgoGraph, type GLink, type GNode, type Hop, type Page, type User } from './types.ts';
 
 export type CrawlBudget = {
-  // Hop-1 accounts kept (mutuals first).
+  // Hop-1 accounts kept (mutuals first, then follows and followers alternating).
   maxFriends: number;
-  // Follower pages read for ego, used to mark mutuals.
+  // Follower pages read for ego: followers join hop 1 and mark mutuals.
   egoFollowerPages: number;
   // Following pages read per friend.
   pagesPerFriend: number;
-  // A hop-2 account needs this many hop-1 friends following it.
+  // A hop-2 account needs this many hop-1 accounts following it.
   fofMinSupport: number;
   // Total node cap.
   maxNodes: number;
@@ -74,17 +74,30 @@ function stub(fid: number): User {
 }
 
 function makeNode(u: User, hop: Hop): GNode {
-  return { ...u, id: idOf(u.fid), hop, mutualWithEgo: false, support: 0, community: -1, expanded: false };
+  return { ...u, id: idOf(u.fid), hop, support: 0, community: -1, expanded: false };
 }
 
 // Follow edges as a directed set "a>b".
 export class FollowSet {
   private set = new Set<string>();
+  // Accounts whose whole following list, or whole follower list, was read: a follow missing from it is known absent.
+  private outRead = new Set<number>();
+  private inRead = new Set<number>();
   add(a: number, b: number): void {
     if (a !== b) this.set.add(`${a}>${b}`);
   }
   has(a: number, b: number): boolean {
     return this.set.has(`${a}>${b}`);
+  }
+  readOut(fid: number): void {
+    this.outRead.add(fid);
+  }
+  readIn(fid: number): void {
+    this.inRead.add(fid);
+  }
+  // Whether a>b is known either way: seen, or missing from a list read in full.
+  knows(a: number, b: number): boolean {
+    return this.has(a, b) || this.outRead.has(a) || this.inRead.has(b);
   }
   // Collapse into links; a reciprocal pair becomes one mutual link.
   links(keep: Set<number>): GLink[] {
@@ -97,7 +110,7 @@ export class FollowSet {
       if (seen.has(pair)) continue;
       seen.add(pair);
       const mutual = this.has(b, a);
-      out.push({ source: idOf(a), target: idOf(b), kind: mutual ? 'mutual' : 'follow' });
+      out.push({ source: idOf(a), target: idOf(b), kind: mutual ? 'mutual' : 'follow', oneWay: !mutual && this.knows(b, a) });
     }
     return out;
   }
@@ -113,14 +126,21 @@ export async function crawlEgo(provider: DataProvider, egoFid: number, budget: C
   const followerSet = new Set(egoFollowers.fids);
 
   const followingUnique = [...new Set(egoFollowing.fids)].filter((f) => f !== egoFid);
-  // Mutuals first, then follow order from the provider.
-  const ranked = [...followingUnique.filter((f) => followerSet.has(f)), ...followingUnique.filter((f) => !followerSet.has(f))];
+  const followingSet = new Set(followingUnique);
+  const followersUnique = [...followerSet].filter((f) => f !== egoFid);
+  const youFollow = followingUnique.filter((f) => !followerSet.has(f));
+  const theyFollow = followersUnique.filter((f) => !followingSet.has(f));
+  // Your circle: mutuals first, then one-way follows each way, alternating, in provider order. With follower pages
+  // unread, some "you follow" accounts are unseen mutuals, so they keep the places ahead of followers.
+  const ranked = [...followingUnique.filter((f) => followerSet.has(f)), ...(egoFollowers.complete ? alternate(youFollow, theyFollow) : [...youFollow, ...theyFollow])];
   const friends = ranked.slice(0, budget.maxFriends);
-  if (ranked.length > friends.length || !egoFollowing.complete) truncated.push(`friends capped at ${friends.length}`);
+  if (ranked.length > friends.length || !egoFollowing.complete) truncated.push(`circle capped at ${friends.length}`);
 
   const follows = new FollowSet();
   for (const f of followingUnique) follows.add(egoFid, f);
   for (const f of egoFollowers.fids) follows.add(f, egoFid);
+  if (egoFollowing.complete) follows.readOut(egoFid);
+  if (egoFollowers.complete) follows.readIn(egoFid);
 
   const friendSet = new Set(friends);
   const support = new Map<number, number>();
@@ -129,15 +149,16 @@ export async function crawlEgo(provider: DataProvider, egoFid: number, budget: C
   await pool(friends, budget.concurrency, async (f) => {
     const out = await pages((c) => provider.following(f, c), budget.pagesPerFriend);
     if (!out.complete) cut++;
+    else follows.readOut(f);
     for (const g of out.fids) {
       follows.add(f, g);
       if (g !== egoFid && !friendSet.has(g)) support.set(g, (support.get(g) ?? 0) + 1);
     }
     done++;
-    progress(`Reading friends' follows ${done}/${friends.length}`, 0.1 + 0.7 * (done / friends.length));
+    progress(`Reading your circle's follows ${done}/${friends.length}`, 0.1 + 0.7 * (done / friends.length));
   });
 
-  if (cut) truncated.push(`${cut} of ${friends.length} friends' follow lists read in part`);
+  if (cut) truncated.push(`${cut} of ${friends.length} follow lists read in part`);
   const room = Math.max(0, budget.maxNodes - friends.length - 1);
   const fofAll = [...support.entries()].filter(([, s]) => s >= budget.fofMinSupport).sort((x, y) => y[1] - x[1] || x[0] - y[0]);
   const fof = fofAll.slice(0, room).map(([f]) => f);
@@ -155,18 +176,16 @@ export async function crawlEgo(provider: DataProvider, egoFid: number, budget: C
   nodes.push(ego);
   for (const f of friends) {
     const n = makeNode(profiles.get(f) ?? stub(f), 1);
-    // Ego's follower pages may be partial; the friend's own list closes the gap.
-    n.mutualWithEgo = followerSet.has(f) || follows.has(f, egoFid);
     n.expanded = true;
     nodes.push(n);
   }
   for (const f of fof) {
     const n = makeNode(profiles.get(f) ?? stub(f), 2);
     n.support = support.get(f) ?? 0;
-    n.mutualWithEgo = followerSet.has(f) && follows.has(egoFid, f);
     nodes.push(n);
   }
   for (const n of nodes) if (n.hop === 1) n.support = countSupport(follows, friends, n.fid);
+  relate(nodes, follows, egoFid);
 
   const keep = new Set(all);
   const links = follows.links(keep);
@@ -174,6 +193,24 @@ export async function crawlEgo(provider: DataProvider, egoFid: number, budget: C
   assignCommunities(graph);
   progress('Laying out', 1);
   return { graph, follows };
+}
+
+// a0, b0, a1, b1, ... then the longer list's tail.
+function alternate<T>(a: T[], b: T[]): T[] {
+  const out: T[] = [];
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    if (i < a.length) out.push(a[i]);
+    if (i < b.length) out.push(b[i]);
+  }
+  return out;
+}
+
+// Follow direction to and from the ego, where read; ego follower pages may be partial, and a friend's own list closes the gap.
+function relate(nodes: GNode[], follows: FollowSet, egoFid: number): void {
+  for (const n of nodes) {
+    n.egoFollows = follows.knows(egoFid, n.fid) ? follows.has(egoFid, n.fid) : undefined;
+    n.followsEgo = follows.knows(n.fid, egoFid) ? follows.has(n.fid, egoFid) : undefined;
+  }
 }
 
 function countSupport(follows: FollowSet, friends: number[], fid: number): number {
@@ -213,6 +250,8 @@ export async function expandNode(provider: DataProvider, graph: EgoGraph, follow
   const have = new Map(graph.nodes.map((n) => [n.fid, n]));
   for (const g of out.fids) follows.add(node.fid, g);
   for (const g of inc.fids) follows.add(g, node.fid);
+  if (out.complete) follows.readOut(node.fid);
+  if (inc.complete) follows.readIn(node.fid);
   node.expanded = true;
 
   // New accounts: those the node follows that already-known nodes also follow, best first.
@@ -239,6 +278,7 @@ export async function expandNode(provider: DataProvider, graph: EgoGraph, follow
   const keep = new Set(graph.nodes.map((n) => n.fid));
   const before = graph.links.length;
   graph.links = follows.links(keep);
+  relate(graph.nodes, follows, fidOf(graph.egoId));
   seatNewcomers(graph, node);
   return { added, linked: graph.links.length - before };
 }

@@ -1,8 +1,9 @@
 // SVG view: batched link paths, nodes with avatars, community hulls, zoom/pan, drag,
 // Focus | Context | All scope by depth, search, and Vizster-style X-ray coloring.
 import * as d3 from 'd3';
-import type { EgoGraph, GLink, GNode } from '../data/types.ts';
+import { egoTie, type EgoGraph, type EgoTie, type GLink, type GNode } from '../data/types.ts';
 import { Layout, type SimLink, type SimNode } from './layout.ts';
+import { TouchGestures, type Pt } from './touch.ts';
 
 export type Mode = 'focus' | 'context' | 'all';
 export type Xray = 'community' | 'hop' | 'followers' | 'mutual';
@@ -11,17 +12,33 @@ export type ViewEvents = {
   onSelect(node: GNode | undefined): void;
   onExpand(node: GNode): void;
   onBackground(): void;
+  // Touch scrub preview: the node under the finger; at undefined = preview over, lifted = ended by a clean lift.
+  onPeek(node: GNode | undefined, at?: Pt, lifted?: boolean): void;
 };
 
-export type LinkFilter = 'all' | 'mutual';
+// Links row: which follow directions draw. A link seen from one end is mutual, following (that end follows) or follows.
+export type LinkShow = { mutual: boolean; following: boolean; follows: boolean };
 
 const PALETTE = ['#8a63d2', '#56b4e9', '#e69f00', '#009e73', '#cc79a7', '#f0e442', '#d55e00', '#7fd1c7', '#b8a1ff', '#ff9eb5', '#9ccc65', '#ffb74d'];
 const HOP_COLORS = ['#ffe080', '#8a63d2', '#56b4e9', '#7d8396'];
+// Same colours as --tie-* in style.css: yellow both ways, green a follower, blue followed, gray not read.
+const TIE_COLORS: Record<EgoTie, string> = { mutual: '#ffd84d', 'follows-you': '#34d399', 'you-follow': '#60a5fa', none: '#5b6072', unread: '#9aa0b4' };
+
+// Which way a link's follow runs, seen from one of its ends: both ways, in (a follower), out (followed),
+// or half (one way seen, the return never read).
+type Tie = 'mutual' | 'in' | 'out' | 'half';
+type LinkClass = 'follow' | 'mutual' | `ego-${Tie}` | `hit-${Tie}`;
+const LINK_CLASSES: LinkClass[] = ['follow', 'mutual', 'ego-half', 'ego-mutual', 'ego-in', 'ego-out', 'hit-half', 'hit-mutual', 'hit-in', 'hit-out'];
+export const tieFrom = (l: Pick<SimLink, 'kind' | 'oneWay'> & { target: { id: string } }, end: string): Tie =>
+  l.kind === 'mutual' ? 'mutual' : !l.oneWay ? 'half' : l.target.id === end ? 'in' : 'out';
 const LABEL_ZOOM = 1.35;
 const SEARCH_CAP = 64;
 // Vizster hover hysteresis.
 const HOVER_EXIT_MS = 500;
 const NEAR_LABEL_CAP = 24;
+// A finger covers a node: the scrub picks the nearest rim within this many screen px.
+const PICK_PX = 24;
+const ZOOM_EXTENT: [number, number] = [0.05, 12];
 // Focus re-solves on a tap; a double tap's second press must find the node where it was.
 const DOUBLE_TAP_MS = 250;
 // Label zoom bands: hop 1 names from LABEL_ZOOM*0.6, the rest from LABEL_ZOOM*1.4.
@@ -32,13 +49,14 @@ export class GraphView {
   private svg: d3.Selection<SVGSVGElement, unknown, null, undefined>;
   private root: d3.Selection<SVGGElement, unknown, null, undefined>;
   private hullG: d3.Selection<SVGGElement, unknown, null, undefined>;
-  private linkPaths: Record<'follow' | 'mutual' | 'ego' | 'hit', d3.Selection<SVGPathElement, unknown, null, undefined>>;
+  private linkPaths: Record<LinkClass, d3.Selection<SVGPathElement, unknown, null, undefined>>;
   private nodeG: d3.Selection<SVGGElement, unknown, null, undefined>;
   private nodeSel?: d3.Selection<SVGGElement, SimNode, SVGGElement, unknown>;
   private zoom: d3.ZoomBehavior<SVGSVGElement, unknown>;
   private layout: Layout;
   // One drag behaviour for the view's life: a fresh one per render orphans an in-progress touch drag.
   private dragB: ReturnType<Layout['drag']>;
+  private touch: TouchGestures;
   private clickTimer = 0;
   private events: ViewEvents;
   private graph?: EgoGraph;
@@ -52,8 +70,10 @@ export class GraphView {
   private hullsOn = true;
   private focusId?: string;
   private hoverId?: string;
+  // A finger preview is running: the selection steps out of the highlight until it ends.
+  private touchHover = false;
   private hoverTimer = 0;
-  private linkFilter: LinkFilter = 'all';
+  private linkShow: LinkShow = { mutual: true, following: true, follows: true };
   private near1 = new Set<string>();
   private near2 = new Set<string>();
   private searchHits = new Set<string>();
@@ -79,36 +99,60 @@ export class GraphView {
     this.root = this.svg.append('g').attr('class', 'root');
     this.hullG = this.root.append('g').attr('class', 'hulls');
     const linkG = this.root.append('g').attr('class', 'links');
-    this.linkPaths = {
-      follow: linkG.append('path').attr('class', 'link follow'),
-      mutual: linkG.append('path').attr('class', 'link mutual'),
-      ego: linkG.append('path').attr('class', 'link ego'),
-      hit: linkG.append('path').attr('class', 'link hit'),
-    };
+    // "ego-in" = class "link ego tie-in"; lit links draw last, on top.
+    this.linkPaths = Object.fromEntries(
+      LINK_CLASSES.map((c) => {
+        const [group, tie] = c.split('-');
+        return [c, linkG.append('path').attr('class', tie ? `link ${group} tie-${tie}` : `link ${group}`)];
+      }),
+    ) as Record<LinkClass, d3.Selection<SVGPathElement, unknown, null, undefined>>;
     this.nodeG = this.root.append('g').attr('class', 'nodes');
     this.svg.append('defs').append('clipPath').attr('id', 'avatarClip').attr('clipPathUnits', 'objectBoundingBox').append('circle').attr('cx', 0.5).attr('cy', 0.5).attr('r', 0.5);
 
     this.zoom = d3
       .zoom<SVGSVGElement, unknown>()
-      .scaleExtent([0.05, 12])
+      .scaleExtent(ZOOM_EXTENT)
       .clickDistance(8)
+      // Touch goes to TouchGestures: one finger previews, two zoom and pan.
+      .touchable(() => false)
       .on('zoom', (e: d3.D3ZoomEvent<SVGSVGElement, unknown>) => {
         this.root.attr('transform', e.transform.toString());
         if (!this.panning && e.sourceEvent) this.handMoved = true;
         const crossed = labelBand(e.transform.k) !== labelBand(this.k);
         this.k = e.transform.k;
         if (crossed) this.paintLabels();
+        this.touch?.refresh();
       });
     this.svg.call(this.zoom).on('dblclick.zoom', null);
     this.svg.on('click', (e: MouseEvent) => {
-      if (e.target === this.svg.node()) {
-        this.focus(undefined, false);
-        this.events.onBackground();
-      }
+      if (e.target === this.svg.node() && !this.touch.recent()) this.tapBackground();
     });
 
     this.layout = new Layout(() => this.tick(), () => this.onSettled());
     this.dragB = this.layout.drag(() => this.k);
+    this.touch = new TouchGestures(el, {
+      pick: (p) => this.pickAt(p),
+      scrub: (id, at, lifted) => this.scrub(id, at, lifted),
+      tap: (id) => {
+        const n = id ? this.byId.get(id) : undefined;
+        if (n) this.tapNode(n);
+        else this.tapBackground();
+      },
+      doubleTap: (id) => {
+        const n = this.byId.get(id);
+        if (n) this.doubleTapNode(n);
+      },
+      hold: () => {
+        this.svg.interrupt();
+        this.panning = false;
+        return d3.zoomTransform(el);
+      },
+      apply: (t) => {
+        this.handMoved = true;
+        this.svg.call(this.zoom.transform, t);
+      },
+      extent: ZOOM_EXTENT,
+    });
     this.resize();
   }
 
@@ -220,9 +264,17 @@ export class GraphView {
     this.layout.setPull(v);
   }
 
-  setLinkFilter(f: LinkFilter): void {
-    this.linkFilter = f;
+  setLinkShow(show: LinkShow): void {
+    this.linkShow = { ...show };
     this.drawLinks();
+  }
+
+  // Seen from `end` by the Links row; a link seen from neither end (the dim background) is mutual or one-way.
+  private linkShown(l: SimLink, end: string | undefined): boolean {
+    const show = this.linkShow;
+    if (l.kind === 'mutual') return show.mutual;
+    if (end === undefined) return show.following || show.follows;
+    return l.target.id === end ? show.follows : show.following;
   }
 
   // Expanded nodes hold still (Vizster pins every expanded focus).
@@ -417,24 +469,11 @@ export class GraphView {
     sel
       .on('click', (e: MouseEvent, d) => {
         e.stopPropagation();
-        // The sheet opens first so a Focus re-solve frames the space above it.
-        const run = () => {
-          this.events.onSelect(d);
-          this.focus(d.id, false);
-        };
-        clearTimeout(this.clickTimer);
-        if (this.mode === 'focus') this.clickTimer = window.setTimeout(run, DOUBLE_TAP_MS);
-        else run();
+        if (!this.touch.recent()) this.tapNode(d);
       })
       .on('dblclick', (e: MouseEvent, d) => {
         e.stopPropagation();
-        clearTimeout(this.clickTimer);
-        // Double tap is structural: expand an unexpanded node, else release its pin.
-        if (!d.expanded) this.events.onExpand(d);
-        else if (d.pinned) {
-          this.layout.togglePin(d);
-          this.paint();
-        }
+        if (!this.touch.recent()) this.doubleTapNode(d);
       })
       .on('pointerenter', (e: PointerEvent, d) => {
         if (e.pointerType !== 'mouse') return;
@@ -462,7 +501,7 @@ export class GraphView {
     const ctx = this.mode === 'context';
     const color = this.colorFn();
     // Connectivity highlight (Vizster F5): hover, else the selection, lights hop 1 and hop 2.
-    const src = this.hoverId ?? this.focusId;
+    const src = this.hoverId ?? this.litFocus;
     this.near1 = new Set(src ? this.adj.get(src) : []);
     this.near2 = new Set<string>();
     if (src) for (const id of this.ball([src], 2)) if (id !== src && !this.near1.has(id)) this.near2.add(id);
@@ -470,7 +509,7 @@ export class GraphView {
     // Hop 2 of a dense follow graph covers nearly everything, so it fades instead of staying lit.
     const lightOf = (id: string) => id === src || lit.has(id) || this.near1.has(id);
     this.nodeSel
-      .classed('focus', (d) => d.id === this.focusId)
+      .classed('focus', (d) => d.id === this.litFocus)
       .classed('hit', (d) => lit.has(d.id) || d.id === src)
       .classed('near1', (d) => this.near1.has(d.id))
       .classed('near2', (d) => this.near2.has(d.id))
@@ -490,19 +529,25 @@ export class GraphView {
     if (!this.nodeSel) return;
     const lit = this.litSet();
     // Neighbour labels only for a small neighbourhood; a hub's ring of names is unreadable.
-    const around = this.focusId ? this.adj.get(this.focusId) : undefined;
+    const focus = this.litFocus;
+    const around = focus ? this.adj.get(focus) : undefined;
     const near = around && around.size <= NEAR_LABEL_CAP ? around : undefined;
     this.nodeSel
       .select<SVGTextElement>('text.label')
-      .style('display', (d) => (d.hop === 0 || d.id === this.focusId || lit.has(d.id) || near?.has(d.id) || this.k >= LABEL_ZOOM * (d.hop === 1 ? 0.6 : 1.4) ? null : 'none'));
+      .style('display', (d) => (d.hop === 0 || d.id === focus || lit.has(d.id) || near?.has(d.id) || this.k >= LABEL_ZOOM * (d.hop === 1 ? 0.6 : 1.4) ? null : 'none'));
   }
 
   // Union of focus, hover, and search: one highlight style.
   private litSet(): Set<string> {
     const s = new Set(this.searchHits);
-    if (this.focusId) s.add(this.focusId);
+    if (this.litFocus) s.add(this.litFocus);
     if (this.hoverId) s.add(this.hoverId);
     return s;
+  }
+
+  // The selection as the highlight sees it: hidden while a finger previews, so only the account under it is lit.
+  private get litFocus(): string | undefined {
+    return this.touchHover ? undefined : this.focusId;
   }
 
   private colorFn(): (d: SimNode) => string {
@@ -510,7 +555,7 @@ export class GraphView {
       case 'hop':
         return (d) => HOP_COLORS[d.hop];
       case 'mutual':
-        return (d) => (d.hop === 0 ? HOP_COLORS[0] : d.mutualWithEgo ? '#34d399' : d.hop === 1 ? '#f87171' : '#5b6072');
+        return (d) => (d.hop === 0 ? HOP_COLORS[0] : TIE_COLORS[egoTie(d)]);
       case 'followers': {
         const deg = (d: SimNode) => this.adj.get(d.id)?.size ?? 0;
         const max = d3.max(this.nodes, deg) ?? 1;
@@ -537,11 +582,13 @@ export class GraphView {
       const counts = d3.rollup(this.nodes.filter((n) => n.community >= 0), (v) => v.length, (n) => n.community);
       [...counts.entries()].sort((a, b) => a[0] - b[0]).slice(0, 8).forEach(([c, n]) => item(this.communityColor(c), `#${c + 1} · ${n}`));
     } else if (this.xray === 'hop') {
-      ['You', 'You follow', 'Friends of friends', 'Expanded'].forEach((t, i) => item(HOP_COLORS[i], t));
+      ['You', 'Your circle', 'Friends of friends', 'Expanded'].forEach((t, i) => item(HOP_COLORS[i], t));
     } else if (this.xray === 'mutual') {
-      item('#34d399', 'Follows you back');
-      item('#f87171', 'Does not follow back');
-      item('#5b6072', 'Not followed');
+      item(TIE_COLORS.mutual, 'Follow each other');
+      item(TIE_COLORS['follows-you'], 'Follows you');
+      item(TIE_COLORS['you-follow'], 'You follow');
+      item(TIE_COLORS.none, 'Neither');
+      item(TIE_COLORS.unread, 'Not read');
     } else {
       item(d3.interpolatePlasma(0.1), 'Few links here');
       item(d3.interpolatePlasma(0.9), 'Many links here');
@@ -553,6 +600,7 @@ export class GraphView {
     this.nodeSel?.filter((d) => this.visible(d)).attr('transform', (d) => `translate(${d.x},${d.y})`);
     this.drawLinks();
     if (this.hullsOn) this.drawHulls();
+    this.touch.refresh();
   }
 
   private onSettled(): void {
@@ -563,7 +611,10 @@ export class GraphView {
   private drawLinks(): void {
     const lit = this.litSet();
     const ctx = this.mode === 'context';
-    const parts: Record<'follow' | 'mutual' | 'ego' | 'hit', string[]> = { follow: [], mutual: [], ego: [], hit: [] };
+    const parts = Object.fromEntries(LINK_CLASSES.map((c) => [c, [] as string[]])) as Record<LinkClass, string[]>;
+    // Lit links are coloured from the hovered or selected account, links to you from you.
+    const centre = this.hoverId ?? this.litFocus;
+    const egoId = this.graph?.egoId ?? '';
     for (const l of this.links) {
       const s = l.source;
       const t = l.target;
@@ -571,17 +622,15 @@ export class GraphView {
       if (!this.visible(s) || !this.visible(t)) continue;
       if (ctx && (!this.scope.has(s.id) || !this.scope.has(t.id))) continue;
       const hot = lit.size > 0 && (lit.has(s.id) || lit.has(t.id));
-      if (!hot && !l.ego && this.linkFilter === 'mutual' && l.kind !== 'mutual') continue;
+      const end = hot ? (s.id === centre || t.id === centre ? centre! : lit.has(s.id) ? s.id : t.id) : l.ego ? egoId : undefined;
+      if (!this.linkShown(l, end)) continue;
       const seg = `M${s.x.toFixed(1)},${s.y!.toFixed(1)}L${t.x.toFixed(1)},${t.y!.toFixed(1)}`;
-      if (hot) parts.hit.push(seg);
-      else if (l.ego) parts.ego.push(seg);
-      else parts[l.kind].push(seg);
+      if (end === undefined) parts[l.kind].push(seg);
+      else parts[`${hot ? 'hit' : 'ego'}-${tieFrom(l, end)}`].push(seg);
     }
-    for (const k of Object.keys(parts) as Array<keyof typeof parts>) this.linkPaths[k].attr('d', parts[k].join(''));
+    for (const c of LINK_CLASSES) this.linkPaths[c].attr('d', parts[c].join(''));
     const dim = lit.size > 0;
-    this.linkPaths.follow.classed('dim', dim);
-    this.linkPaths.mutual.classed('dim', dim);
-    this.linkPaths.ego.classed('dim', dim);
+    for (const c of LINK_CLASSES) if (!c.startsWith('hit')) this.linkPaths[c].classed('dim', dim);
   }
 
   private drawHulls(): void {
@@ -598,6 +647,63 @@ export class GraphView {
       .attr('d', (d) => d.path)
       .attr('fill', (d) => this.communityColor(d.c))
       .attr('stroke', (d) => this.communityColor(d.c));
+  }
+
+  // Click or tap: select. The sheet opens first so a Focus re-solve frames the space above it;
+  // in Focus the re-scope waits out a double tap so the node holds still under the second tap.
+  private tapNode(d: SimNode): void {
+    const run = () => {
+      this.events.onSelect(d);
+      this.focus(d.id, false);
+    };
+    clearTimeout(this.clickTimer);
+    if (this.mode === 'focus') this.clickTimer = window.setTimeout(run, DOUBLE_TAP_MS);
+    else run();
+  }
+
+  // Double click or tap is structural: expand an unexpanded node, else release its pin.
+  private doubleTapNode(d: SimNode): void {
+    clearTimeout(this.clickTimer);
+    if (!d.expanded) this.events.onExpand(d);
+    else if (d.pinned) {
+      this.layout.togglePin(d);
+      this.paint();
+    }
+  }
+
+  private tapBackground(): void {
+    clearTimeout(this.clickTimer);
+    this.focus(undefined, false);
+    this.events.onBackground();
+  }
+
+  // Nearest visible node rim to an svg-local point, within PICK_PX screen px.
+  private pickAt(p: Pt): string | undefined {
+    const t = d3.zoomTransform(this.svg.node()!);
+    const [wx, wy] = t.invert(p);
+    let best: SimNode | undefined;
+    let bestD = Infinity;
+    for (const n of this.nodes) {
+      if (n.x === undefined || !this.visible(n)) continue;
+      const d = (Math.hypot(n.x - wx, n.y! - wy) - n.r) * t.k;
+      if (d < bestD) {
+        bestD = d;
+        best = n;
+      }
+    }
+    return best && bestD <= PICK_PX ? best.id : undefined;
+  }
+
+  // The touch scrub drives the same hover highlight as the mouse; paint only, 0 px moved.
+  private scrub(id: string | undefined, at?: Pt, lifted?: boolean): void {
+    clearTimeout(this.hoverTimer);
+    const touching = at !== undefined;
+    if (this.hoverId !== id || this.touchHover !== touching) {
+      this.hoverId = id;
+      this.touchHover = touching;
+      this.paint();
+    }
+    this.events.onPeek(id ? this.byId.get(id) : undefined, at, lifted);
   }
 
   setCoverBottom(px: number): void {

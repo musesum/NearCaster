@@ -7,9 +7,9 @@
 // - no-op guard: identical visible ids + link wires => nothing to do
 // - forces: guardIn, charge, link, voro, comm, ring, polar, guardOut; ego pinned at (0,0)
 // - guard forces at both ends: VEL_MAX clamp, non-finite repair (v3e blowup classes A-C)
-// - drag moves only the dragged node, pins it on drop, voro parts its neighbours
+// - drag (mouse) moves only the dragged node, pins it on drop, voro parts its neighbours
 import * as d3 from 'd3';
-import type { GNode, LinkKind } from '../data/types.ts';
+import { egoTie, type GNode, type LinkKind } from '../data/types.ts';
 
 export type SimNode = GNode &
   d3.SimulationNodeDatum & {
@@ -20,7 +20,7 @@ export type SimNode = GNode &
     seedAngle?: number;
     ringR?: number;
   };
-export type SimLink = { source: SimNode; target: SimNode; kind: LinkKind; ego: boolean; tree?: boolean };
+export type SimLink = { source: SimNode; target: SimNode; kind: LinkKind; oneWay?: boolean; ego: boolean; tree?: boolean };
 
 export const TUNE = {
   charge: -50,
@@ -129,7 +129,7 @@ export class Layout {
       ego.y = ego.fy = 0;
       ego.pinned = true;
     }
-    const ring = this.all.filter((n) => n.hop === 1).sort((a, b) => a.community - b.community || Number(b.mutualWithEgo) - Number(a.mutualWithEgo) || a.fid - b.fid);
+    const ring = this.all.filter((n) => n.hop === 1).sort((a, b) => a.community - b.community || Number(egoTie(b) === 'mutual') - Number(egoTie(a) === 'mutual') || a.fid - b.fid);
     const meanCap = d3.mean(ring, (n) => n.r * 2) ?? 14;
     this.r1 = Math.max(160, (ring.length * (meanCap + 8)) / (2 * Math.PI));
     ring.forEach((n, i) => {
@@ -263,7 +263,9 @@ export class Layout {
     return d3
       .drag<SVGGElement, SimNode>()
       .clickDistance(8)
-      .filter((event: MouseEvent | TouchEvent) => (event.type === 'touchstart' ? (event as TouchEvent).touches.length === 1 : !(event as MouseEvent).button))
+      // Mouse only: a finger scrubs the hover preview (graph/touch.ts).
+      .touchable(() => false)
+      .filter((event: MouseEvent) => !event.button)
       .on('start', (e: d3.D3DragEvent<SVGGElement, SimNode, SimNode>) => {
         from = [e.x, e.y];
         moving = false;

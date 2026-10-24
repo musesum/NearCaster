@@ -103,5 +103,10 @@ export function sampleProvider(seed = 7, count = 900): DataProvider {
       await delay();
       return fids.map((f) => net.users.get(f)).filter((u): u is User => u !== undefined);
     },
+    async fidByName(name) {
+      await delay();
+      for (const [fid, u] of net.users) if (u.username.toLowerCase() === name) return fid;
+      return undefined;
+    },
   };
 }

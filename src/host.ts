@@ -24,23 +24,28 @@ export type Host = {
 
 const ZERO: Insets = { top: 0, bottom: 0, left: 0, right: 0 };
 
-// isInMiniApp() short-circuits outside an iframe/webview; inside one it waits for the context handshake.
+// After a reload inside a client the context handshake can take seconds (sdk.isInMiniApp() gives it 1 s).
+const HANDSHAKE_MS = 5000;
+
+// A plain page short-circuits; a framed one waits up to HANDSHAKE_MS for the client's context.
 // sdk.context user fields are host-supplied and untrusted: display only.
 export async function connectHost(): Promise<Host> {
-  let inMiniApp = false;
-  try {
-    inMiniApp = await sdk.isInMiniApp();
-  } catch {
-    inMiniApp = false;
-  }
-  if (!inMiniApp) {
-    // A framed page that missed the 1 s handshake may still be in a slow client: ready() must reach it.
-    const framed = window.parent !== window || 'ReactNativeWebView' in window;
-    if (framed) void Promise.resolve(sdk.actions.ready({ disableNativeGestures: true })).catch(() => undefined);
+  const framed = window.parent !== window || 'ReactNativeWebView' in window;
+  if (!framed) return browserHost();
+  const ctx = await Promise.race([
+    // sdk.context is a comlink proxy: .then is the supported await; .catch would post a function to the host.
+    sdk.context.then(
+      (c) => c,
+      () => undefined,
+    ),
+    new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), HANDSHAKE_MS)),
+  ]);
+  if (!ctx?.user) {
+    // A client that answers after the wait still needs ready() to drop its splash.
+    void Promise.resolve(sdk.actions.ready({ disableNativeGestures: true })).catch(() => undefined);
     return browserHost();
   }
 
-  const ctx = await sdk.context;
   const insets = ctx.client.safeAreaInsets ?? ZERO;
   const hasHaptics = ctx.features?.haptics === true;
   return {

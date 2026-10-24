@@ -1,4 +1,4 @@
-// "Near you": friends of friends the ego does not follow, ranked by how many of the ego's follows follow them.
+// "Near you": friends of friends the ego does not follow, ranked by how many accounts in the ego's circle (hop 1) follow them.
 import type { EgoGraph, GNode } from '../data/types.ts';
 
 export type NearPick = { node: GNode; via: GNode[] };
@@ -13,7 +13,7 @@ export function nearYou(graph: EgoGraph, limit = 12): NearPick[] {
     for (const [a, b] of pairs) {
       const from = byId.get(a);
       const to = byId.get(b);
-      if (!from || !to || from.hop !== 1 || to.hop < 2) continue;
+      if (!from || !to || from.hop !== 1 || to.hop < 2 || to.egoFollows) continue;
       const list = via.get(to.id) ?? [];
       list.push(from);
       via.set(to.id, list);
