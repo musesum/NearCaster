@@ -335,23 +335,30 @@ function wireControls(view: GraphView, recenter: (target: string) => void): () =
   };
   seg('mode', 'mode', (v) => view.setMode(v as Mode));
   seg('xray', 'xray', (v) => view.setXray(v as Xray));
-  // Links row: All turns every direction on; each direction toggles itself.
+  // Links row: All (its own button) turns every direction on; each direction toggles itself.
   const links = $('links');
+  const linksAll = $('linksAll');
   const show: LinkShow = { mutual: true, following: true, follows: true };
   const kinds = Object.keys(show) as Array<keyof LinkShow>;
+  const pressed = (b: HTMLElement, on: boolean) => {
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-pressed', String(on));
+  };
+  const applyLinks = () => {
+    links.querySelectorAll('button').forEach((b) => pressed(b, show[b.dataset.links as keyof LinkShow]));
+    pressed(linksAll, kinds.every((k) => show[k]));
+    view.setLinkShow(show);
+  };
+  linksAll.addEventListener('click', () => {
+    for (const k of kinds) show[k] = true;
+    applyLinks();
+  });
   links.addEventListener('click', (e) => {
     const b = (e.target as HTMLElement).closest('button');
     if (!b) return;
-    const k = b.dataset.links as keyof LinkShow | 'all';
-    if (k === 'all') for (const x of kinds) show[x] = true;
-    else show[k] = !show[k];
-    links.querySelectorAll('button').forEach((x) => {
-      const v = x.dataset.links as keyof LinkShow | 'all';
-      const on = v === 'all' ? kinds.every((y) => show[y]) : show[v];
-      x.classList.toggle('on', on);
-      x.setAttribute('aria-pressed', String(on));
-    });
-    view.setLinkShow(show);
+    const k = b.dataset.links as keyof LinkShow;
+    show[k] = !show[k];
+    applyLinks();
   });
 
   const depth = $<HTMLInputElement>('depth');

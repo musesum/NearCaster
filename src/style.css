@@ -189,7 +189,50 @@ button.icon {
   color: #fff;
 }
 
-/* Links row: each direction carries its link colour. */
+/* Links row: All stands apart as a gradient of the three link colours; each direction fills with its colour when on. */
+.links-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#linksAll {
+  border: 0;
+  border-radius: 9px;
+  padding: 5px 11px;
+  font-size: 13px;
+  font-weight: 650;
+  color: #111;
+  background: linear-gradient(90deg, var(--tie-mutual), var(--tie-out), var(--tie-in));
+  opacity: 0.45;
+}
+
+#linksAll.on {
+  opacity: 1;
+}
+
+#links button.on {
+  color: #111;
+}
+
+#links button[data-links='mutual'].on {
+  background: var(--tie-mutual);
+}
+
+#links button[data-links='following'].on {
+  background: var(--tie-out);
+}
+
+#links button[data-links='follows'].on {
+  background: var(--tie-in);
+}
+
+/* On a filled toggle the dot turns dark, so the button keeps its width either way. */
+#links button.on i.tie {
+  background: #111;
+  opacity: 0.55;
+}
+
 .seg i.tie {
   display: inline-block;
   width: 8px;

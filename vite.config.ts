@@ -4,14 +4,18 @@ import { defineConfig, loadEnv, type Plugin } from 'vite';
 // NEARCASTER_URL = public https origin (tunnel or production); FARCASTER_ASSOC_* = signed accountAssociation.
 function miniApp(env: Record<string, string>): Plugin {
   const origin = (env.NEARCASTER_URL ?? '').replace(/\/$/, '');
+  // Unsigned until all three values are set: an empty block would read as a bad signature.
+  const signed = !!(env.FARCASTER_ASSOC_HEADER && env.FARCASTER_ASSOC_PAYLOAD && env.FARCASTER_ASSOC_SIGNATURE);
   const manifest = () =>
     JSON.stringify(
       {
-        accountAssociation: {
-          header: env.FARCASTER_ASSOC_HEADER ?? '',
-          payload: env.FARCASTER_ASSOC_PAYLOAD ?? '',
-          signature: env.FARCASTER_ASSOC_SIGNATURE ?? '',
-        },
+        ...(signed && {
+          accountAssociation: {
+            header: env.FARCASTER_ASSOC_HEADER,
+            payload: env.FARCASTER_ASSOC_PAYLOAD,
+            signature: env.FARCASTER_ASSOC_SIGNATURE,
+          },
+        }),
         miniapp: {
           version: '1',
           name: 'NearCaster',
