@@ -213,6 +213,33 @@ async function boot(): Promise<void> {
     if (host.user) void load(host.user.fid, host.user);
   });
 
+  // Add NearCaster: inside a client, shown until the viewer's app list holds it.
+  const addBtn = $<HTMLButtonElement>('addBtn');
+  let added = host.added ?? true;
+  const syncAdd = () => {
+    addBtn.hidden = added;
+  };
+  host.onAdded((v) => {
+    added = v;
+    syncAdd();
+  });
+  addBtn.addEventListener('click', async () => {
+    addBtn.disabled = true;
+    try {
+      const r = await host.addApp();
+      if (r === 'added') {
+        added = true;
+        toast('NearCaster added to your apps');
+      } else if (r === 'unsigned') toast(`${location.host} has no signed Farcaster manifest`);
+    } catch (e) {
+      toast(`Add failed: ${(e as Error).message}`);
+    } finally {
+      addBtn.disabled = false;
+      syncAdd();
+    }
+  });
+  syncAdd();
+
   const runSearch = wireControls(view, (raw) => void centerOn(raw));
   // Dev-only probe for harness checks.
   if (import.meta.env.DEV) (window as unknown as { __nc: unknown }).__nc = { view, state };

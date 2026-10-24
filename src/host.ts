@@ -10,15 +10,23 @@ export type HostUser = {
   pfpUrl?: string;
 };
 
+// declined = the viewer said no; unsigned = the client found no signed manifest for this domain.
+export type AddResult = 'added' | 'declined' | 'unsigned';
+
 export type Host = {
   inMiniApp: boolean;
   platform: 'web' | 'mobile' | 'browser';
   user?: HostUser;
   insets: Insets;
+  // Inside a client: whether the viewer's app list holds NearCaster; undefined on a plain page.
+  added?: boolean;
   ready(): Promise<void>;
   viewProfile(fid: number, username?: string): Promise<void>;
   openUrl(url: string): Promise<void>;
   composeCast(text: string, embeds?: string[]): Promise<void>;
+  addApp(): Promise<AddResult>;
+  // Adds and removals made from the client's own menu.
+  onAdded(cb: (added: boolean) => void): void;
   haptic(): void;
 };
 
@@ -48,6 +56,14 @@ export async function connectHost(): Promise<Host> {
 
   const insets = ctx.client.safeAreaInsets ?? ZERO;
   const hasHaptics = ctx.features?.haptics === true;
+  // A client without add support keeps the pill hidden; one that cannot list its capabilities is trusted.
+  const canAdd = await Promise.race([
+    sdk.getCapabilities().then(
+      (c) => c.includes('actions.addMiniApp'),
+      () => true,
+    ),
+    new Promise<boolean>((resolve) => setTimeout(() => resolve(true), 1000)),
+  ]);
   return {
     inMiniApp: true,
     platform: ctx.client.platformType ?? 'web',
@@ -58,6 +74,7 @@ export async function connectHost(): Promise<Host> {
       pfpUrl: ctx.user.pfpUrl,
     },
     insets,
+    added: canAdd ? ctx.client.added === true : undefined,
     // Graph drag and pinch conflict with the client's swipe-to-dismiss.
     ready: () => sdk.actions.ready({ disableNativeGestures: true }),
     viewProfile: (fid) => sdk.actions.viewProfile({ fid }),
@@ -65,10 +82,23 @@ export async function connectHost(): Promise<Host> {
     composeCast: async (text, embeds) => {
       await sdk.actions.composeCast({ text, embeds: embedsTuple(embeds) });
     },
+    addApp: () => sdk.actions.addMiniApp().then(() => 'added', addRejection),
+    onAdded: (cb) => {
+      sdk.on('miniAppAdded', () => cb(true));
+      sdk.on('miniAppRemoved', () => cb(false));
+    },
     haptic: () => {
       if (hasHaptics) void sdk.haptics.selectionChanged().catch(() => undefined);
     },
   };
+}
+
+// The SDK's two refusals become results; anything else stays an error.
+function addRejection(e: unknown): AddResult {
+  const name = (e as Error | undefined)?.name;
+  if (name === 'AddMiniApp.RejectedByUser') return 'declined';
+  if (name === 'AddMiniApp.InvalidDomainManifest') return 'unsigned';
+  throw e;
 }
 
 function browserHost(): Host {
@@ -89,6 +119,8 @@ function browserHost(): Host {
       for (const e of embeds ?? []) q.append('embeds[]', e);
       window.open(`https://farcaster.xyz/~/compose?${q}`, '_blank', 'noopener');
     },
+    addApp: () => Promise.reject(new Error('Adding needs a Farcaster client')),
+    onAdded: () => undefined,
     haptic: () => undefined,
   };
 }

@@ -286,6 +286,20 @@ button.icon {
   font-size: 13px;
 }
 
+/* Inside a client until the viewer's app list holds NearCaster; an open side panel covers it. */
+#addBtn {
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  z-index: 3;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--accent);
+  background: var(--panel);
+  color: var(--ink);
+  font-size: 13px;
+}
+
 /* Scrub preview above the finger; never takes input. */
 #peek {
   position: absolute;
