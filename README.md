@@ -34,9 +34,11 @@ If live data fails on the first load, the app falls back to the sample network a
 
 | Input | Touch or pen | Mouse |
 |---|---|---|
-| Preview | hold one finger for 250 ms or slide it: the node nearest the finger (within 24 px of its edge) lights up with its links, and a card above the finger names it; lift to end. With the profile sheet open, the sheet shows the account under the finger, and lifting selects the account it shows (a second finger puts the sheet back) | hover |
-| Select (profile sheet) | tap (under 250 ms, under 10 px of movement); picks the same nearest node as the preview | click |
-| Expand, or release a pin | double tap (second tap within 300 ms and 30 px) | double click |
+| Preview | hold one finger for 250 ms or slide it: the node nearest the finger (within 24 px of its edge) lights up with its links, and a card above the finger names it; lift to end. With the profile sheet open, the sheet shows the picture, name, `@username · fid` and bio of the account under the finger, and lifting selects the account it shows (a second finger puts the sheet back) | hover: the profile panel shows the hovered account's picture, name, `@username · fid` and bio; 500 ms after the mouse leaves the account, or as soon as it reaches the panel, the panel goes back to the selection; with nothing selected the preview stays while the mouse is on it, and its arrow row selects the account |
+| Select (profile sheet, details open) | tap (under 250 ms, under 10 px of movement); picks the same nearest node as the preview | click |
+| Centre the graph on an account (as the profile's Center here) | double tap (second tap within 300 ms and 30 px) | double click |
+| Back and forward through centred graphs | ↶ and ↷, left of the fit button: graphs stay in memory (20 back) and show again without a new crawl, at the current Time setting (re-solved when Time hides accounts) | same |
+| Expand, or release a pin | the profile's Expand and Unpin | same |
 | Zoom | pinch | wheel |
 | Pan | two fingers | drag the background |
 | Move and pin a node | none | drag the node |
@@ -54,6 +56,7 @@ The live data source is the public Snapchain HTTP API at `https://snap.farcaster
 | following | `/v1/linksByFid?fid=&link_type=follow` |
 | followers | `/v1/linksByTargetFid?target_fid=&link_type=follow` |
 | profiles | `/v1/userDataByFid?fid=` |
+| last cast | `/v1/castsByFid?fid=&pageSize=1&reverse=true` |
 
 How the crawl works (`src/data/crawl.ts`, budget `DEFAULT_BUDGET`):
 1. Read the ego's follows (four pages of 500) and followers (two pages of 500). Keep up to 60 accounts in your circle (hop 1): mutuals first, then accounts you follow and accounts following you, alternating. When the follower pages do not hold every follower, accounts you follow come before followers (some of them are mutuals on the unread pages).
@@ -61,7 +64,9 @@ How the crawl works (`src/data/crawl.ts`, budget `DEFAULT_BUDGET`):
 3. Keep the friends-of-friends followed by at least 2 accounts in the circle, ranked by that count, up to 300 nodes in total.
 4. Fetch profiles.
 
-Link colours show which way each follow goes. Links to you are seen from you; when an account is hovered, previewed or selected, its links are seen from it: yellow = both follow each other, green = a follower only, blue = followed only, gray = one way seen and the return never read (friends of friends' own follow lists are not read, and lists over 500 are read in part). Other links stay dim gray (mutual ones brighter). Controls, Links: Mutual (yellow), Following (blue) and Follows (green) each switch their links on or off and fill with their colour while on (seen from the same end as the colour; a dim one-way link shows while either Following or Follows is on). All, a separate gradient button, switches all three back on. Color: Mutual paints each account the same way relative to you: Follow each other (yellow), Follows you (green), You follow (blue), Neither (dark gray), Not read (gray); the profile says "not read" for the same case.
+Link colours show which way each follow goes. Links to you are seen from you; when an account is hovered, previewed or selected, its links are seen from it: yellow = both follow each other, green = a follower only, blue = followed only, gray = one way seen and the return never read (friends of friends' own follow lists are not read, and lists over 500 are read in part). Other links stay dim gray (mutual ones brighter). Controls, Links: Mutual (yellow), Following (blue) and Follows (green) each switch their links on or off and fill with their colour while on (seen from the same end as the colour; a dim one-way link shows while either Following or Follows is on). All, a separate gradient button, switches all three back on. Accounts always take their community colour.
+
+Controls, Time shows accounts by their last cast. The left end shows only accounts that never cast; past a tick, `01m` through hours, days, weeks and months to `10y` (two digits and one letter: m h d w M y, exponential steps) shows accounts that cast within that window; the right end shows everyone. You, the selected account, and an account whose last cast is not read yet always show. Each Time value re-solves the layout around the accounts it shows (150 ms after the slider stops); outside Focus the re-solve starts from the radial seed, so one value always gives one layout, and the bands shrink with the square root of the share shown (never below 35 % of their spacing), so a sparse set sits close together. In Focus, Time hides accounts inside the depth ball; in Context, the hidden accounts leave and the rest gray as before. Last casts (`/v1/castsByFid?fid=&pageSize=1&reverse=true`, one request per account) load after the graph draws, six at a time, starting with you; on the first load Time starts at the window since your own last cast (everyone, if you never cast).
 
 Every cap the crawl hits is listed in the Controls caption.
 
@@ -83,24 +88,24 @@ Cost: one load for fid 3 (dwr) took about 6 to 13 s and about 16 MB. The links a
 
 | Vizster (Heer & boyd 2005) | NearCaster |
 |---|---|
-| Egocentric start, grow on demand | ego + your circle (follows and followers) + friends-of-friends; double-click (or Expand) reads a node's network and pins it |
+| Egocentric start, grow on demand | ego + your circle (follows and followers) + friends-of-friends; the profile's Expand reads a node's network and pins it |
 | Connectivity highlight on hover | mouse hover, one-finger scrub, or the selection: hop 1 orange ring, hop 2 faded, the rest dimmed; 500 ms exit hysteresis for the mouse; during a finger preview only the account under the finger is lit (the selection returns on lift) |
 | Community blobs (Newman CNM) | Louvain over the undirected follow graph, ego excluded; hulls with Vizster corner growth 5 px |
 | Keyword search with auras | regex search over name, username and fid; Enter selects the first hit |
-| Profile panel | panel with bio, ring, You follow, Follows you, "also followed by N in your circle", View profile, Expand, Center here, Cast |
-| X-ray attribute coloring | Color: Community / Hop / Reach (links in the graph) / Mutual |
+| Profile panel | panel at the top left (a bottom sheet on phones) with picture, name, `@username · fid` and bio; an arrow row under the bio opens followers, following, ring, community, You follow, Follows you, "also followed by N in your circle", View profile, Expand, Center here, Cast, and stays open for later profiles (a hover or finger preview shows the top part only) |
+| X-ray attribute coloring | not kept: accounts always take their community colour |
 
 | LeafGraph (flod3-embed.html) | NearCaster `src/graph/layout.ts` |
 |---|---|
 | `solveFit` chokepoint, settle then 420 ms flight, `fitField` (never past 1:1) | `Layout.solveFit`: sync settle from alpha 0.3, cubic ease-in-out flight, camera fit |
 | Calm: highlight and selection move 0 px | paint-only paths; measured 0.000 px on select and on Context |
 | No-op rebuild guard (visible ids + link wires) | signature guard in `reheatLocal` / `bindQuiet` |
-| `reheatAlpha` (alphaTarget 0.12 for 300 ms), `freezeFar`, `thawWhenCold` | the same, used by Expand; the community-pull slider re-solves from the radial seed instead, since repeated reheats folded the bands to one side of the ego |
+| `reheatAlpha` (alphaTarget 0.12 for 300 ms), `freezeFar`, `thawWhenCold` | the same, used by Expand |
 | Forces guardIn, charge −50/240/θ0.9, link (tree 2.4, edges 0.8 ÷ min degree, 3 iterations, cap 2.6), voro, polar, guardOut | the same order; plus community pull 0.08 and radial bands |
 | Voronoi capsule separation instead of forceCollide | Delaunay-neighbour circle separation; drag moves only contact neighbours |
 | v3e guards: VEL_MAX 10000, non-finite repair, guards at both ends | `guardForce()` registered first and last |
-| Focus / Context / All, depth ball | Focus hides and re-solves; Context grays in place; All shows everything; Focus exit restores positions, polar base and camera exactly (0 px); pins made or released inside Focus stand |
-| Drag pins on drop | the same, with the mouse; a press that travels under 8 screen px is a tap and moves nothing; double-click a pinned node to release it |
+| Focus / Context / All, depth ball | Focus hides and re-solves; Context grays in place; All shows everything; Focus exit restores positions, polar base and camera exactly (0 px), unless Time changed inside Focus, which re-solves from the seed; pins made or released inside Focus stand; in Focus, links to you spring (the radial bands are off there), so an account linked only to you stays near |
+| Drag pins on drop | the same, with the mouse; a press that travels under 8 screen px is a tap and moves nothing; the profile's Unpin releases it |
 
 Addition beyond both sources: **radial bands**. A dense follow graph (mean degree about 55) collapses into one blob that drifts off the pinned ego. To prevent that, each hop holds a band around the ego, and better-connected accounts sit nearer the inside of their band.
 

@@ -19,44 +19,39 @@
       <main id="stage">
         <section id="controls" hidden>
           <div class="row">
-            <label>View</label>
-            <div class="seg" id="mode">
-              <button data-mode="focus">Focus</button>
-              <button data-mode="context">Context</button>
-              <button data-mode="all" class="on">All</button>
-            </div>
-          </div>
-          <div class="row">
-            <label for="depth">Focus depth <span id="depthVal">1</span></label>
-            <input id="depth" type="range" min="0" max="4" step="1" value="1" />
-          </div>
-          <div class="row">
-            <label>Color</label>
-            <div class="seg" id="xray">
-              <button data-xray="community" class="on">Community</button>
-              <button data-xray="hop">Hop</button>
-              <button data-xray="followers">Reach</button>
-              <button data-xray="mutual">Mutual</button>
-            </div>
-          </div>
-          <div class="row">
-            <label>Links</label>
-            <div class="links-row">
-              <button id="linksAll" class="on" aria-pressed="true">All</button>
-              <div class="seg" id="links">
-                <button data-links="mutual" class="on" aria-pressed="true"><i class="tie mutual"></i>Mutual</button>
-                <button data-links="following" class="on" aria-pressed="true"><i class="tie out"></i>Following</button>
-                <button data-links="follows" class="on" aria-pressed="true"><i class="tie in"></i>Follows</button>
+            <span class="pair">
+              <label>View</label>
+              <div class="seg" id="mode">
+                <button data-mode="focus">Focus</button>
+                <button data-mode="context">Context</button>
+                <button data-mode="all" class="on">All</button>
               </div>
-            </div>
+            </span>
+            <span class="pair">
+              <label>Links</label>
+              <div class="links-row">
+                <button id="linksAll" class="on" aria-pressed="true">All</button>
+                <div class="seg" id="links">
+                  <button data-links="mutual" class="on" aria-pressed="true"><i class="tie mutual"></i>Mutual</button>
+                  <button data-links="following" class="on" aria-pressed="true"><i class="tie out"></i>Following</button>
+                  <button data-links="follows" class="on" aria-pressed="true"><i class="tie in"></i>Follows</button>
+                </div>
+              </div>
+            </span>
           </div>
           <div class="row">
-            <label for="hulls">Community hulls</label>
-            <input id="hulls" type="checkbox" checked />
-          </div>
-          <div class="row">
-            <label for="pull">Community pull <span id="pullVal"></span></label>
-            <input id="pull" type="range" min="0" max="0.3" step="0.01" />
+            <span class="pair">
+              <label for="hulls">Community hulls</label>
+              <input id="hulls" type="checkbox" checked />
+            </span>
+            <span class="pair grow">
+              <label for="depth">Depth <span id="depthVal">1</span></label>
+              <input id="depth" type="range" min="0" max="4" step="1" value="1" />
+            </span>
+            <span class="pair grow">
+              <label for="time">Time <span id="timeVal" class="num">all</span></label>
+              <span class="track"><i class="tick"></i><input id="time" type="range" min="0" step="1" /></span>
+            </span>
           </div>
           <div class="row">
             <label for="fid">Center on fid or @username</label>
@@ -68,6 +63,8 @@
         <div id="status" class="status"></div>
         <div id="toast" hidden></div>
         <div id="legend"></div>
+        <button id="undoBtn" class="icon fab" aria-label="Back to the previous graph" disabled>↶</button>
+        <button id="redoBtn" class="icon fab" aria-label="Forward to the next graph" disabled>↷</button>
         <button id="fitBtn" class="icon fab" aria-label="Fit graph">⤢</button>
         <button id="meBtn" hidden>My network</button>
         <button id="addBtn" hidden>+ Add NearCaster</button>

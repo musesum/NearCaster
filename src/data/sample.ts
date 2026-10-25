@@ -103,6 +103,12 @@ export function sampleProvider(seed = 7, count = 900): DataProvider {
       await delay();
       return fids.map((f) => net.users.get(f)).filter((u): u is User => u !== undefined);
     },
+    // One in seven never cast; the rest spread on a log scale from 1 minute to 3 years ago.
+    async lastCast(fid) {
+      await delay();
+      const h = mulberry32(fid * 7919)();
+      return h < 1 / 7 ? null : Date.now() - Math.exp(((h - 1 / 7) / (6 / 7)) * Math.log(3 * 525960)) * 60000;
+    },
     async fidByName(name) {
       await delay();
       for (const [fid, u] of net.users) if (u.username.toLowerCase() === name) return fid;

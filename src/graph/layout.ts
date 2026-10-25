@@ -3,7 +3,6 @@
 // - structure changes go through solveFit(): settle synchronously from alpha <= 0.3, then fly 420 ms
 // - selection, hover, and search move 0 px (paint only)
 // - local edits (expand) seed newcomers beside their dad, freeze the far field, reheatAlpha()
-// - community pull re-solves from the radial seed (Focus: reheatAlpha), so a value always gives one layout
 // - alpha rises only in reheatAlpha() (alphaTarget 0.12 for 300 ms); never alpha 1, never a timer loop
 // - no-op guard: identical visible ids + link wires => nothing to do
 // - forces: guardIn, charge, link, voro, comm, ring, polar, guardOut; ego pinned at (0,0)
@@ -60,6 +59,8 @@ const VEL_MAX = 10_000;
 const VORO_STEP = 40;
 const SEED_RING = 62;
 const SEED_JITTER = 6;
+// The bands never shrink below this share of their full spacing.
+const RING_SCALE_MIN = 0.35;
 const THAW_ALPHA = 0.005;
 const ALPHA_MIN = 0.001;
 const SOLVE_ALPHA = 0.3;
@@ -72,9 +73,6 @@ type Snap = { pos: Map<string, [number, number]>; base: Map<string, Polar> };
 
 export class Layout {
   readonly sim: d3.Simulation<SimNode, SimLink>;
-  pull = TUNE.commPull;
-  // The pull the All/Context layout was last solved at (a Focus-time change applies on exit).
-  private solvedPull = TUNE.commPull;
   focusMode = false;
   private all: SimNode[] = [];
   private vis: SimNode[] = [];
@@ -88,6 +86,8 @@ export class Layout {
   private coolTimer = 0;
   private flight?: d3.Timer;
   private r1 = 160;
+  // Band spacing factor: 1 for the whole graph, smaller when Time shows a share of it.
+  private ringScale = 1;
   private onTick: () => void;
   private onSettled: () => void;
 
@@ -118,49 +118,40 @@ export class Layout {
     this.all = all;
   }
 
-  // Reheats walked the bands around the ego: follow links stretched across a band fold it toward one side,
-  // and each reheat folded it further. A re-solve from the seed cannot accumulate; the camera stays.
-  setPull(v: number): void {
-    if (v === this.pull) return;
-    this.pull = v;
-    if (this.focusMode) {
-      this.installForces();
-      this.reheatAlpha();
-      return;
-    }
-    this.resolvePull();
-  }
-
-  private resolvePull(): void {
-    const from = new Map(this.all.map((n) => [n, [n.x ?? 0, n.y ?? 0] as [number, number]]));
-    // An expand's frozen far field is not a pin: it seeds like the rest.
+  // Warm re-solves fold the bands around the ego to one side, a little more each time; a re-solve
+  // from the seed cannot accumulate. An expand's frozen far field is not a pin: it seeds like the rest.
+  // With `vis` (Time hid accounts), the bands shrink with the share shown, so a sparse graph sits close.
+  reseed(vis?: SimNode[]): void {
     this.thawFar();
-    this.seedRadial();
+    this.seedRadial(vis);
     this.base.clear();
-    this.solveFit(this.vis, this.links, () => undefined, from);
   }
 
   // Deterministic radial seed: hop 1 on a ring sorted by community, deeper hops fanned around their dad.
-  seedRadial(): void {
+  seedRadial(vis?: SimNode[]): void {
+    const shown = vis ? new Set(vis) : undefined;
+    const counted = (n: SimNode) => !shown || shown.has(n);
+    // Band area follows the number of accounts, so radii follow its square root.
+    this.ringScale = shown ? Math.min(1, Math.max(RING_SCALE_MIN, Math.sqrt(shown.size / Math.max(1, this.all.length)))) : 1;
     const ego = this.all.find((n) => n.hop === 0);
     if (ego) {
       ego.x = ego.fx = 0;
       ego.y = ego.fy = 0;
       ego.pinned = true;
     }
-    const ring = this.all.filter((n) => n.hop === 1).sort((a, b) => a.community - b.community || Number(egoTie(b) === 'mutual') - Number(egoTie(a) === 'mutual') || a.fid - b.fid);
+    const ring = this.all.filter((n) => n.hop === 1 && counted(n)).sort((a, b) => a.community - b.community || Number(egoTie(b) === 'mutual') - Number(egoTie(a) === 'mutual') || a.fid - b.fid);
     const meanCap = d3.mean(ring, (n) => n.r * 2) ?? 14;
-    this.r1 = Math.max(160, (ring.length * (meanCap + 8)) / (2 * Math.PI));
+    this.r1 = Math.max(160 * this.ringScale, (ring.length * (meanCap + 8)) / (2 * Math.PI));
     ring.forEach((n, i) => {
       const th = -Math.PI / 2 + (2 * Math.PI * i) / Math.max(1, ring.length);
       n.seedAngle = th;
-      // A pinned node holds its place (a pull re-solve keeps drops and expands).
+      // A pinned node holds its place through a re-seed.
       if (n.pinned) return;
       n.x = this.r1 * Math.cos(th);
       n.y = this.r1 * Math.sin(th);
       n.vx = n.vy = 0;
     });
-    this.seedEntering(this.all.filter((n) => n.hop >= 2 && !n.pinned).map((n) => ((n.x = undefined), n)));
+    this.seedEntering(this.all.filter((n) => n.hop >= 2 && !n.pinned && counted(n)).map((n) => ((n.x = undefined), n)));
   }
 
   // seedEntering (P:1961-1988), adapted to bands: unplaced nodes fan out on their own band,
@@ -176,7 +167,7 @@ export class Layout {
       const span = Math.min(1.4 * Math.PI, 0.09 * Math.max(0, want - 1));
       group.forEach((n, i) => {
         const th = bearing - span / 2 + (want > 1 ? (span * i) / (want - 1) : 0);
-        const rr = n.ringR ?? this.r1 + TUNE.ringGap;
+        const rr = n.ringR ?? this.r1 + TUNE.ringGap * this.ringScale;
         const jit = SEED_JITTER * Math.sqrt(i + 1);
         n.seedAngle = th;
         n.x = rr * Math.cos(th) + jit * Math.cos(i * GOLDEN);
@@ -201,10 +192,7 @@ export class Layout {
     for (let i = 0; i < SOLVE_TICKS && this.sim.alpha() >= ALPHA_MIN; i++) this.sim.tick();
     this.sim.alpha(0).stop();
     for (const n of vis) n.vx = n.vy = 0;
-    if (!this.focusMode) {
-      this.captureBase();
-      this.solvedPull = this.pull;
-    }
+    if (!this.focusMode) this.captureBase();
     const to = new Map(vis.map((n) => [n, [n.x!, n.y!] as [number, number]]));
     fit(to);
     this.fly(from, to);
@@ -262,7 +250,6 @@ export class Layout {
     this.bind(vis, links);
     const to = new Map(vis.map((n) => [n, [n.x!, n.y!] as [number, number]]));
     this.fly(from, to);
-    if (this.pull !== this.solvedPull) this.resolvePull();
   }
 
   togglePin(n: SimNode): void {
@@ -355,7 +342,8 @@ export class Layout {
 
   private installForces(): void {
     // Ego links are drawn, not sprung: the ring force holds hop 1 at R1 around the pinned ego.
-    const sprung = this.links.filter((l) => !l.ego);
+    // Focus turns the ring off, so there they spring, or an account linked only to the ego drifts off.
+    const sprung = this.focusMode ? this.links : this.links.filter((l) => !l.ego);
     this.linkDeg = new Map();
     for (const l of sprung) {
       this.linkDeg.set(l.source.id, (this.linkDeg.get(l.source.id) ?? 0) + 1);
@@ -446,7 +434,7 @@ export class Layout {
 
   // Per-community centroid pull (v2b COMM_PULL), ego and pinned nodes excluded.
   private commForce(alpha: number): void {
-    const k = this.pull * alpha;
+    const k = TUNE.commPull * alpha;
     if (!k) return;
     const acc = new Map<number, { x: number; y: number; n: number }>();
     for (const d of this.vis) {
@@ -479,8 +467,8 @@ export class Layout {
           : d.hop === 1
             ? this.r1 * (1.08 - 0.16 * s)
             : d.hop === 2
-              ? this.r1 + TUNE.ringGap + TUNE.ringBand * (1 - s)
-              : this.r1 + TUNE.ringGap + TUNE.ringBand + 70;
+              ? this.r1 + (TUNE.ringGap + TUNE.ringBand * (1 - s)) * this.ringScale
+              : this.r1 + (TUNE.ringGap + TUNE.ringBand + 70) * this.ringScale;
     }
   }
 

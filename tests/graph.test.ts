@@ -83,6 +83,7 @@ function fakeProvider(out: Record<number, number[]>, size = 1000): DataProvider 
     followers: async (fid, cursor) => page(inc.get(fid) ?? [], cursor),
     users: async (fids) => fids.map((fid) => ({ fid, username: `u${fid}`, displayName: `U${fid}` })),
     fidByName: async () => undefined,
+    lastCast: async () => null,
   };
 }
 

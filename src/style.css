@@ -138,9 +138,62 @@ button.icon {
 
 #controls .row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 8px 14px;
+}
+
+/* Two controls on one row: each label stays beside its control; the second pair holds the slider and takes the rest. */
+#controls .pair {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#controls .pair:last-child {
+  justify-content: flex-end;
+}
+
+/* A slider pair shares what its row has left, and wraps below 150 px. */
+#controls .pair.grow {
+  flex: 1 1 150px;
+  min-width: 0;
+  justify-content: flex-start;
+}
+
+/* Time: a tick on the track between the unposted stop and the cast windows. */
+#controls .track {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  max-width: 220px;
+}
+
+#controls .track input[type='range'] {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: none;
+}
+
+#controls .track .tick {
+  position: absolute;
+  top: 50%;
+  left: calc(8px + (100% - 16px) * var(--tick, 0));
+  width: 2px;
+  height: 14px;
+  margin: -7px 0 0 -1px;
+  background: var(--ink-3);
+  pointer-events: none;
+}
+
+/* Fixed-width value, so the slider does not shift as "05m" turns to "all". */
+#controls .num {
+  display: inline-block;
+  min-width: 2.2em;
+  font-variant-numeric: tabular-nums;
 }
 
 #controls .row.small {
@@ -153,8 +206,11 @@ button.icon {
   white-space: nowrap;
 }
 
+/* Shares a row with other controls, so it takes what is left instead of its ~129 px default. */
 #controls input[type='range'] {
   flex: 1;
+  min-width: 0;
+  width: 0;
   max-width: 220px;
   accent-color: var(--accent);
 }
@@ -382,7 +438,7 @@ button.icon {
   display: flex;
   flex-wrap: wrap;
   gap: 4px 10px;
-  max-width: calc(100% - 64px);
+  max-width: calc(100% - 160px);
   font-size: 11px;
   color: var(--ink-2);
   pointer-events: none;
@@ -409,6 +465,20 @@ button.icon {
   width: 40px !important;
   height: 40px !important;
   background: var(--panel) !important;
+}
+
+/* Undo and redo sit left of the fit button, on its row. */
+#undoBtn {
+  right: 106px;
+}
+
+#redoBtn {
+  right: 58px;
+}
+
+.fab:disabled {
+  opacity: 0.35;
+  cursor: default;
 }
 
 /* Graph */
@@ -538,10 +608,6 @@ button.icon {
   pointer-events: none;
 }
 
-#graph.xray image.avatar {
-  display: none;
-}
-
 .hull {
   stroke-width: 36px;
   stroke-linejoin: round;
@@ -550,7 +616,7 @@ button.icon {
 /* Profile panel (Vizster profile view) */
 #panel {
   position: absolute;
-  right: 8px;
+  left: 8px;
   top: 8px;
   width: min(300px, calc(100% - 16px));
   max-height: calc(100% - 16px);
@@ -644,6 +710,40 @@ button.icon {
   border: 0;
   background: transparent;
   color: var(--ink-3);
+}
+
+/* Arrow row under the bio: opens the stats, circle chips and actions below it. */
+#panel .more {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  margin-top: 6px;
+  padding: 8px 0 2px;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink-3);
+}
+
+#panel .more i {
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: translateY(-2px) rotate(45deg);
+}
+
+#panel .more[aria-expanded='true'] i {
+  transform: translateY(2px) rotate(-135deg);
+}
+
+/* My network also sits at the top left; the side panel starts under it. */
+@media (min-width: 521px) {
+  #meBtn:not([hidden]) ~ #panel {
+    top: 48px;
+    max-height: calc(100% - 56px);
+  }
 }
 
 #panel h4 {

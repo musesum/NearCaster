@@ -6,6 +6,10 @@ export const DEFAULT_HUB = 'https://snap.farcaster.xyz:3381';
 
 type LinkMessage = { data?: { fid?: number; linkBody?: { type?: string; targetFid?: number } } };
 type LinkResponse = { messages?: LinkMessage[]; nextPageToken?: string };
+type CastResponse = { messages?: Array<{ data?: { timestamp?: number } }> };
+
+// Farcaster timestamps count seconds from 2021-01-01T00:00:00Z.
+const FARCASTER_EPOCH_MS = Date.UTC(2021, 0, 1);
 type UserDataMessage = { data?: { userDataBody?: { type?: string; value?: string } } };
 type UserDataResponse = { messages?: UserDataMessage[] };
 
@@ -97,6 +101,11 @@ export function snapchainProvider(opts: SnapchainOptions = {}): DataProvider {
         if (err instanceof HttpError && err.status < 500) return undefined;
         throw err;
       }
+    },
+    async lastCast(fid) {
+      const r = await getJson<CastResponse>(`${base}/v1/castsByFid?${new URLSearchParams({ fid: String(fid), pageSize: '1', reverse: 'true' })}`);
+      const ts = r.messages?.[0]?.data?.timestamp;
+      return typeof ts === 'number' ? FARCASTER_EPOCH_MS + ts * 1000 : null;
     },
   };
 }

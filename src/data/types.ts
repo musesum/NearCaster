@@ -8,6 +8,8 @@ export type User = {
   followerCount?: number;
   followingCount?: number;
   bio?: string;
+  // Most recent cast (unix ms); null = never cast; undefined = not read yet.
+  lastCast?: number | null;
 };
 
 export type Page = { fids: number[]; next?: string };
@@ -22,6 +24,8 @@ export interface DataProvider {
   users(fids: number[]): Promise<User[]>;
   // The fid registered to a username (fname or ENS name); undefined when no account has it.
   fidByName(name: string): Promise<number | undefined>;
+  // When the account last cast (unix ms); null = never.
+  lastCast(fid: number): Promise<number | null>;
 }
 
 // hop 0 = ego, 1 = your circle (ego follows it or it follows ego), 2 = friend of a friend, 3 = reached by expanding a hop-2 node.

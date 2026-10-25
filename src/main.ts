@@ -1,10 +1,11 @@
 import './style.css';
 import { connectHost, type Host } from './host.ts';
-import { crawlEgo, expandNode, DEFAULT_BUDGET, type FollowSet } from './data/crawl.ts';
+import { crawlEgo, expandNode, pool, DEFAULT_BUDGET, type FollowSet } from './data/crawl.ts';
 import { sampleProvider, SAMPLE_EGO_FID } from './data/sample.ts';
 import { HttpError, snapchainProvider } from './data/snapchain.ts';
-import { idOf, type DataProvider, type EgoGraph, type GNode } from './data/types.ts';
-import { GraphView, type LinkShow, type Mode, type Xray } from './graph/view.ts';
+import { fidOf, idOf, type DataProvider, type EgoGraph, type GNode } from './data/types.ts';
+import { GraphView, type LinkShow, type Mode } from './graph/view.ts';
+import { ageStop, stepFor, AGE_STEPS } from './ui/age.ts';
 import { Panel } from './ui/panel.ts';
 import { Peek } from './ui/peek.ts';
 import { parseCenter } from './ui/center.ts';
@@ -24,6 +25,8 @@ type State = {
 class EmptyGraphError extends Error {}
 
 // A username stub ("fid:N") is not a real mention or profile path.
+// Graphs undo can step back through.
+const HISTORY_MAX = 20;
 const handleOf = (n: GNode) => (n.username.startsWith('fid:') ? `fid ${n.fid}` : `@${n.username}`);
 
 async function boot(): Promise<void> {
@@ -45,10 +48,34 @@ async function boot(): Promise<void> {
   let browseFrom: string | undefined;
   let browsed: string | undefined;
   let browseGraph: EgoGraph | undefined;
+  // A mouse hover previews its account in the panel; when the hover ends the panel shows what it showed before.
+  let hovering = false;
+  let hoverFrom: string | undefined;
   const view = new GraphView($('graph') as unknown as SVGSVGElement, {
-    onSelect: (node) => select(node),
-    onExpand: (node) => void expand(node),
+    // A tap opens the profile with its details.
+    onSelect: (node) => {
+      panel.openDetails();
+      select(node);
+    },
+    onCenter: (node) => {
+      if (node.id !== state.graph?.egoId) recenterOn(node);
+    },
     onBackground: () => hidePanel(),
+    onHover: (node) => {
+      const graph = state.graph;
+      if (!graph || browseFrom) return;
+      if (node) closeControls();
+      if (node && !hovering) {
+        hovering = true;
+        hoverFrom = panel.openId;
+      }
+      if (!hovering) return;
+      if (!node) hovering = false;
+      if (node && node.id !== hoverFrom) return panel.show(node, graph, view.communityColor, true);
+      const from = graph.nodes.find((x) => x.id === hoverFrom);
+      if (!from) return hidePanel();
+      if (panel.openId !== from.id || panel.previewing) panel.show(from, graph, view.communityColor);
+    },
     onPeek: (node, at, lifted) => {
       if (!at) {
         peek.hide();
@@ -61,6 +88,7 @@ async function boot(): Promise<void> {
         peekId = undefined;
         return;
       }
+      closeControls();
       if (node.id !== peekId) {
         // One tick per node crossed, like a picker detent.
         host.haptic();
@@ -71,10 +99,37 @@ async function boot(): Promise<void> {
     },
   });
 
+  // A hover or finger preview starts: the Controls menu gets out of the way.
+  function closeControls(): void {
+    if ($('controls').hidden) return;
+    $('controls').hidden = true;
+    $('menuBtn').setAttribute('aria-expanded', 'false');
+  }
+
   function hidePanel(): void {
+    hovering = false;
+    hoverFrom = undefined;
     panel.hide();
     cover(0);
   }
+
+  // The arrow row and hover previews change the sheet's height; the cover follows (a browse holds the height).
+  new ResizeObserver(() => {
+    if ($('panel').hidden || browseFrom) return;
+    const top = syncCover();
+    if (top !== undefined && panel.openId && !panel.previewing) view.reveal(panel.openId, top);
+  }).observe($('panel'));
+
+  // The mouse reaching the panel: with a selection, the hover ends and the selection shows;
+  // without one, the preview holds (it may cover the node it shows).
+  $('panel').addEventListener('pointerenter', (e) => {
+    if (e.pointerType !== 'mouse' || !hovering) return;
+    if (hoverFrom) view.endHoverNow();
+    else view.keepHover(true);
+  });
+  $('panel').addEventListener('pointerleave', (e) => {
+    if (e.pointerType === 'mouse') view.keepHover(false);
+  });
 
   // The sheet's height holds while browsing (a longer profile scrolls), so its edge, the cover and the fit button stay put.
   function browse(node: GNode, graph: EgoGraph): void {
@@ -84,7 +139,7 @@ async function boot(): Promise<void> {
       $('panel').style.height = `${$('panel').offsetHeight}px`;
     }
     browsed = node.id;
-    panel.show(node, graph, view.communityColor);
+    panel.show(node, graph, view.communityColor, true);
   }
 
   // Forgets a browse without touching the sheet's content.
@@ -139,6 +194,7 @@ async function boot(): Promise<void> {
       if (!state.loading) select(n);
       setStatus('');
       toast(`+${r.added} people, +${Math.max(0, r.linked)} links via ${handleOf(n)}`);
+      void readCasts(graph);
       sourceCaption(state.graph);
     } catch (e) {
       setStatus('');
@@ -154,9 +210,15 @@ async function boot(): Promise<void> {
       const n = state.graph?.nodes.find((x) => x.id === id);
       if (n) select(n);
     },
+    select: (n) => {
+      select(n);
+      view.focus(n.id, false);
+    },
     viewProfile: (n) => void host.viewProfile(n.fid, n.username),
     expand: (n) => expand(n),
-    recenter: (n) => void load(n.fid, n.username.startsWith('fid:') ? undefined : { username: n.username, displayName: n.displayName, pfpUrl: n.pfpUrl }),
+    recenter: (n) => recenterOn(n),
+    pinned: (id) => view.isPinned(id),
+    unpin: (id) => view.unpin(id),
     cast: (n) => void host.composeCast(`Found ${handleOf(n)} in my NearCaster circle`, [location.origin + location.pathname]),
     close: () => {
       hidePanel();
@@ -172,6 +234,8 @@ async function boot(): Promise<void> {
     host.haptic();
     // A selection from elsewhere (an expand landing, a Focus tap) ends a browse in progress.
     dropBrowse();
+    // A hover that ends after this selection keeps it.
+    if (hovering) hoverFrom = node.id;
     panel.show(node, state.graph, view.communityColor);
     const top = syncCover();
     if (top !== undefined) view.reveal(node.id, top);
@@ -241,8 +305,88 @@ async function boot(): Promise<void> {
   syncAdd();
 
   const runSearch = wireControls(view, (raw) => void centerOn(raw));
+  const time = wireTime(view);
+
+  // Last casts read after the graph draws, ego first, painted in batches; a newer graph ends the read.
+  // The first load's ego (the viewer, inside a client) sets Time's starting window: since its last cast.
+  let timeDefaulted = false;
+  // Accounts already asked, so a second read (an expand) skips them.
+  const castAsked = new WeakSet<GNode>();
+  async function readCasts(graph: EgoGraph): Promise<void> {
+    const provider = state.provider;
+    const todo = graph.nodes.filter((n) => n.lastCast === undefined && !castAsked.has(n)).sort((a, b) => a.hop - b.hop);
+    const ready: Array<[string, number | null]> = [];
+    let flushT = 0;
+    const flush = () => {
+      flushT = 0;
+      if (state.graph === graph) view.setCasts(ready.splice(0));
+    };
+    await pool(todo, DEFAULT_BUDGET.concurrency, async (n) => {
+      // A load in flight gets the hub to itself.
+      if (state.graph !== graph || state.loading || castAsked.has(n)) return;
+      castAsked.add(n);
+      n.lastCast = await provider.lastCast(n.fid);
+      ready.push([n.id, n.lastCast]);
+      if (n.id === graph.egoId) {
+        flush();
+        if (!timeDefaulted) {
+          timeDefaulted = true;
+          time.setDefault(n.lastCast === null ? AGE_STEPS : stepFor(Date.now() - n.lastCast));
+        }
+      } else if (!flushT) flushT = window.setTimeout(flush, 250);
+    });
+    clearTimeout(flushT);
+    flush();
+  }
+
   // Dev-only probe for harness checks.
   if (import.meta.env.DEV) (window as unknown as { __nc: unknown }).__nc = { view, state };
+
+  function recenterOn(n: GNode): void {
+    void load(n.fid, n.username.startsWith('fid:') ? undefined : { username: n.username, displayName: n.displayName, pfpUrl: n.pfpUrl });
+  }
+
+  // Undo and redo: graphs centred earlier stay in memory (up to HISTORY_MAX back) and show again without a crawl.
+  type Visit = { graph: EgoGraph; follows: FollowSet; provider: DataProvider };
+  const back: Visit[] = [];
+  const ahead: Visit[] = [];
+  const undoBtn = $<HTMLButtonElement>('undoBtn');
+  const redoBtn = $<HTMLButtonElement>('redoBtn');
+  const visitName = (v?: Visit) => {
+    const ego = v?.graph.nodes.find((n) => n.id === v.graph.egoId);
+    return ego ? handleOf(ego) : '';
+  };
+  const syncHistory = () => {
+    undoBtn.disabled = !back.length;
+    redoBtn.disabled = !ahead.length;
+    undoBtn.title = back.length ? `Back to ${visitName(back[back.length - 1])}` : '';
+    redoBtn.title = ahead.length ? `Forward to ${visitName(ahead[ahead.length - 1])}` : '';
+  };
+  function revisit(from: Visit[], to: Visit[]): void {
+    if (state.loading || state.expanding || !state.graph || !state.follows || !from.length) return;
+    const v = from.pop()!;
+    to.push({ graph: state.graph, follows: state.follows, provider: state.provider });
+    state.graph = v.graph;
+    state.follows = v.follows;
+    state.provider = v.provider;
+    view.setGraph(v.graph, false);
+    hidePanel();
+    runSearch();
+    sourceCaption(v.graph);
+    void readCasts(v.graph);
+    markUrl(fidOf(v.graph.egoId));
+    syncMe();
+    syncHistory();
+  }
+  undoBtn.addEventListener('click', () => revisit(back, ahead));
+  redoBtn.addEventListener('click', () => revisit(ahead, back));
+
+  function markUrl(fid: number): void {
+    const url = new URL(location.href);
+    url.searchParams.set('fid', String(fid));
+    if (state.provider.name === 'sample') url.searchParams.set('source', 'sample');
+    history.replaceState(null, '', url);
+  }
 
   // Errors keep the current graph. Only a failing live source on the first load falls back to the sample.
   async function load(fid: number, hint?: Partial<GNode>): Promise<void> {
@@ -268,6 +412,13 @@ async function boot(): Promise<void> {
         crawled = await crawlEgo(state.provider, fid, DEFAULT_BUDGET, setStatus);
       }
       const { graph, follows } = crawled;
+      // A new centre starts a new branch of the history.
+      if (state.graph && state.follows && !fellBack) {
+        back.push({ graph: state.graph, follows: state.follows, provider: state.provider });
+        if (back.length > HISTORY_MAX) back.shift();
+        ahead.length = 0;
+        syncHistory();
+      }
       state.graph = graph;
       state.follows = follows;
       setStatus('');
@@ -276,19 +427,17 @@ async function boot(): Promise<void> {
       hidePanel();
       runSearch();
       sourceCaption(graph);
+      void readCasts(graph);
       // A fallback keeps the asked-for URL, so a reload retries live data.
-      if (!fellBack) {
-        const url = new URL(location.href);
-        url.searchParams.set('fid', String(fid));
-        if (state.provider.name === 'sample') url.searchParams.set('source', 'sample');
-        history.replaceState(null, '', url);
-      }
+      if (!fellBack) markUrl(fid);
     } catch (e) {
       console.error('[load]', e);
       const msg = `Could not load fid ${fid}: ${(e as Error).message}`;
       if (state.graph) {
         setStatus('');
         toast(msg);
+        // The kept graph's reads stopped for this load.
+        void readCasts(state.graph);
       } else setStatus(msg, undefined, true);
     } finally {
       state.loading = false;
@@ -341,6 +490,43 @@ function sourceCaption(g: EgoGraph): void {
   $('source').textContent = `${friends} in your circle · ${fof} friends of friends · ${g.links.length} links · ${comms} communities · source ${g.provider}${g.truncated.length ? ` · ${g.truncated.join('; ')}` : ''}`;
 }
 
+// Time: unposted (never cast) at the left, a tick, then cast within 01m … 10y, then all at the right.
+// A default arrives once, unless the slider was moved first.
+function wireTime(view: GraphView): { setDefault(step: number): void } {
+  const time = $<HTMLInputElement>('time');
+  let moved = false;
+  time.max = String(AGE_STEPS);
+  time.parentElement!.style.setProperty('--tick', String(0.5 / AGE_STEPS));
+  const stop = () => ageStop(Number(time.value));
+  const label = () => {
+    const s = stop();
+    $('timeVal').textContent = s === 'unposted' ? '∅' : (s?.label ?? 'all');
+    time.setAttribute('aria-valuetext', s === 'unposted' ? 'never cast' : s ? `cast within ${s.label}` : 'all');
+  };
+  const apply = () => {
+    const s = stop();
+    view.setTimeKeep(s === 'unposted' ? 'unposted' : s?.ms);
+  };
+  time.value = time.max;
+  label();
+  // Each value re-solves the layout, so a drag or a held key solves once it stops for 150 ms.
+  let solveT = 0;
+  time.addEventListener('input', () => {
+    moved = true;
+    label();
+    clearTimeout(solveT);
+    solveT = window.setTimeout(apply, 150);
+  });
+  return {
+    setDefault(step) {
+      if (moved) return;
+      time.value = String(step);
+      label();
+      apply();
+    },
+  };
+}
+
 // Returns the search runner so a new or grown graph re-applies the query.
 function wireControls(view: GraphView, recenter: (target: string) => void): () => void {
   const menuBtn = $('menuBtn');
@@ -360,7 +546,6 @@ function wireControls(view: GraphView, recenter: (target: string) => void): () =
     });
   };
   seg('mode', 'mode', (v) => view.setMode(v as Mode));
-  seg('xray', 'xray', (v) => view.setXray(v as Xray));
   // Links row: All (its own button) turns every direction on; each direction toggles itself.
   const links = $('links');
   const linksAll = $('linksAll');
@@ -394,17 +579,6 @@ function wireControls(view: GraphView, recenter: (target: string) => void): () =
   });
 
   $<HTMLInputElement>('hulls').addEventListener('change', (e) => view.setHulls((e.target as HTMLInputElement).checked));
-
-  const pull = $<HTMLInputElement>('pull');
-  pull.value = String(view.pull);
-  $('pullVal').textContent = view.pull.toFixed(2);
-  // Each value re-solves the whole layout, so a drag or a held key solves once it stops for 150 ms.
-  let pullT = 0;
-  pull.addEventListener('input', () => {
-    $('pullVal').textContent = Number(pull.value).toFixed(2);
-    clearTimeout(pullT);
-    pullT = window.setTimeout(() => view.setPull(Number(pull.value)), 150);
-  });
 
   $('fidForm').addEventListener('submit', (e) => {
     e.preventDefault();

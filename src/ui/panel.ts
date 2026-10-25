@@ -4,6 +4,9 @@ import { nearYou } from './near.ts';
 
 export type PanelActions = {
   focus(id: string): void;
+  select(node: GNode): void;
+  pinned(id: string): boolean;
+  unpin(id: string): void;
   viewProfile(node: GNode): void;
   expand(node: GNode): Promise<void>;
   recenter(node: GNode): void;
@@ -17,6 +20,10 @@ export class Panel {
   private el: HTMLElement;
   private actions: PanelActions;
   private shown?: string;
+  private preview = false;
+  // The arrow row under the bio: open shows the stats, circle chips and actions, and stays open for later profiles.
+  private details = false;
+  private expanding?: string;
 
   constructor(el: HTMLElement, actions: PanelActions) {
     this.el = el;
@@ -27,34 +34,37 @@ export class Panel {
     return this.shown;
   }
 
-  hide(): void {
-    this.el.hidden = true;
-    this.shown = undefined;
+  // A tap opens the details; the arrow row can still shut them.
+  openDetails(): void {
+    this.details = true;
   }
 
-  show(node: GNode, graph: EgoGraph, communityColor: (c: number) => string): void {
+  get previewing(): boolean {
+    return this.preview;
+  }
+
+  hide(): void {
+    this.el.hidden = true;
+    this.el.classList.remove('preview');
+    this.shown = undefined;
+    this.preview = false;
+  }
+
+  // A preview (hover, finger browse) shows only the picture, names and bio above a shut arrow row.
+  show(node: GNode, graph: EgoGraph, communityColor: (c: number) => string, preview = false): void {
     this.shown = node.id;
-    const byId = new Map(graph.nodes.map((n) => [n.id, n]));
-    const ins: GNode[] = [];
-    const outs: GNode[] = [];
-    for (const l of graph.links) {
-      if (l.target === node.id) {
-        const o = byId.get(l.source);
-        if (o) ins.push(o);
-        if (l.kind === 'mutual' && o) outs.push(o);
-      } else if (l.source === node.id) {
-        const o = byId.get(l.target);
-        if (o) outs.push(o);
-        if (l.kind === 'mutual' && o) ins.push(o);
-      }
-    }
-    const friendsIn = ins.filter((n) => n.hop === 1 && n.id !== node.id);
+    this.preview = preview;
+    const open = this.details && !preview;
     const el = this.el;
     el.replaceChildren();
+    el.classList.toggle('preview', preview);
+    el.hidden = false;
 
-    const close = button('×', 'close', () => this.actions.close());
-    close.setAttribute('aria-label', 'Close profile');
-    el.append(close);
+    if (!preview) {
+      const close = button('×', 'close', () => this.actions.close());
+      close.setAttribute('aria-label', 'Close profile');
+      el.append(close);
+    }
 
     const head = div('head');
     if (node.pfpUrl) {
@@ -74,6 +84,35 @@ export class Panel {
     el.append(head);
 
     if (node.bio) el.append(text('div', 'bio', node.bio));
+
+    // A preview's arrow selects the account with its details open.
+    const more = button('', 'more', () => {
+      this.details = !open;
+      if (preview) this.actions.select(node);
+      else this.show(node, graph, communityColor);
+      this.el.querySelector<HTMLElement>('.more')?.focus();
+    });
+    more.setAttribute('aria-expanded', String(open));
+    more.setAttribute('aria-label', open ? 'Hide details' : 'Show details');
+    more.append(document.createElement('i'));
+    el.append(more);
+    if (!open) return;
+
+    const byId = new Map(graph.nodes.map((n) => [n.id, n]));
+    const ins: GNode[] = [];
+    const outs: GNode[] = [];
+    for (const l of graph.links) {
+      if (l.target === node.id) {
+        const o = byId.get(l.source);
+        if (o) ins.push(o);
+        if (l.kind === 'mutual' && o) outs.push(o);
+      } else if (l.source === node.id) {
+        const o = byId.get(l.target);
+        if (o) outs.push(o);
+        if (l.kind === 'mutual' && o) ins.push(o);
+      }
+    }
+    const friendsIn = ins.filter((n) => n.hop === 1 && n.id !== node.id);
 
     const stats = div('stats');
     const stat = (k: string, v: string | number | undefined) => {
@@ -121,22 +160,37 @@ export class Panel {
     const acts = div('actions');
     acts.append(button('View profile', 'primary', () => this.actions.viewProfile(node)));
     if (!node.expanded) {
-      const ex = button('Expand', '', async () => {
+      // A redraw during the expand (a hover ending) keeps the busy state.
+      const busy = this.expanding === node.id;
+      const ex = button(busy ? 'Expanding…' : 'Expand', 'expand', async () => {
+        this.expanding = node.id;
         ex.disabled = true;
         ex.textContent = 'Expanding…';
         try {
           await this.actions.expand(node);
         } finally {
-          ex.disabled = false;
-          ex.textContent = 'Expand';
+          this.expanding = undefined;
+          const now = this.el.querySelector<HTMLButtonElement>('button.expand');
+          if (now) {
+            now.disabled = false;
+            now.textContent = 'Expand';
+          }
         }
       });
+      ex.disabled = busy;
       acts.append(ex);
     }
     if (node.hop > 0) acts.append(button('Center here', '', () => this.actions.recenter(node)));
+    if (node.hop > 0 && this.actions.pinned(node.id)) {
+      acts.append(
+        button('Unpin', '', () => {
+          this.actions.unpin(node.id);
+          this.show(node, graph, communityColor);
+        }),
+      );
+    }
     acts.append(button('Cast', '', () => this.actions.cast(node)));
     el.append(acts);
-    el.hidden = false;
   }
 }
 

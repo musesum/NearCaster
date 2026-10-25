@@ -1,17 +1,19 @@
 // SVG view: batched link paths, nodes with avatars, community hulls, zoom/pan, drag,
-// Focus | Context | All scope by depth, search, and Vizster-style X-ray coloring.
+// Focus | Context | All scope by depth, search, and community colouring.
 import * as d3 from 'd3';
-import { egoTie, type EgoGraph, type EgoTie, type GLink, type GNode } from '../data/types.ts';
+import type { EgoGraph, GLink, GNode } from '../data/types.ts';
 import { Layout, type SimLink, type SimNode } from './layout.ts';
 import { TouchGestures, type Pt } from './touch.ts';
 
 export type Mode = 'focus' | 'context' | 'all';
-export type Xray = 'community' | 'hop' | 'followers' | 'mutual';
 
 export type ViewEvents = {
   onSelect(node: GNode | undefined): void;
-  onExpand(node: GNode): void;
+  // Double click or tap: centre the graph on this account.
+  onCenter(node: GNode): void;
   onBackground(): void;
+  // Mouse hover: the node under the mouse; undefined = the hover ended (500 ms after the mouse left it).
+  onHover(node: GNode | undefined): void;
   // Touch scrub preview: the node under the finger; at undefined = preview over, lifted = ended by a clean lift.
   onPeek(node: GNode | undefined, at?: Pt, lifted?: boolean): void;
 };
@@ -20,9 +22,6 @@ export type ViewEvents = {
 export type LinkShow = { mutual: boolean; following: boolean; follows: boolean };
 
 const PALETTE = ['#8a63d2', '#56b4e9', '#e69f00', '#009e73', '#cc79a7', '#f0e442', '#d55e00', '#7fd1c7', '#b8a1ff', '#ff9eb5', '#9ccc65', '#ffb74d'];
-const HOP_COLORS = ['#ffe080', '#8a63d2', '#56b4e9', '#7d8396'];
-// Same colours as --tie-* in style.css: yellow both ways, green a follower, blue followed, gray not read.
-const TIE_COLORS: Record<EgoTie, string> = { mutual: '#ffd84d', 'follows-you': '#34d399', 'you-follow': '#60a5fa', none: '#5b6072', unread: '#9aa0b4' };
 
 // Which way a link's follow runs, seen from one of its ends: both ways, in (a follower), out (followed),
 // or half (one way seen, the return never read).
@@ -35,6 +34,7 @@ const LABEL_ZOOM = 1.35;
 const SEARCH_CAP = 64;
 // Vizster hover hysteresis.
 const HOVER_EXIT_MS = 500;
+const CASTS_QUIET_MS = 1500;
 const NEAR_LABEL_CAP = 24;
 // A finger covers a node: the scrub picks the nearest rim within this many screen px.
 const PICK_PX = 24;
@@ -66,7 +66,6 @@ export class GraphView {
   private adj = new Map<string, Set<string>>();
   private mode: Mode = 'all';
   private depth = 1;
-  private xray: Xray = 'community';
   private hullsOn = true;
   private focusId?: string;
   private hoverId?: string;
@@ -74,6 +73,13 @@ export class GraphView {
   private touchHover = false;
   private hoverTimer = 0;
   private linkShow: LinkShow = { mutual: true, following: true, follows: true };
+  // Time control: 'unposted' = only accounts that never cast; ms = cast within that window; undefined = all.
+  private timeKeep?: 'unposted' | number;
+  private castsTimer = 0;
+  // The next scope solve starts from the radial seed (a Time change outside Focus).
+  private reseedNext = false;
+  // Time when Focus saved its layout.
+  private snapTime?: 'unposted' | number;
   private near1 = new Set<string>();
   private near2 = new Set<string>();
   private searchHits = new Set<string>();
@@ -156,10 +162,6 @@ export class GraphView {
     this.resize();
   }
 
-  get pull(): number {
-    return this.layout.pull;
-  }
-
   // Resize never moves nodes: refit an untouched camera after 150 ms, else keep the view centred.
   resize(): void {
     const r = this.svg.node()!.getBoundingClientRect();
@@ -202,12 +204,15 @@ export class GraphView {
     this.layout.setNodes(this.nodes);
     if (!keepPositions) {
       this.focusId = undefined;
+      clearTimeout(this.hoverTimer);
       this.hoverId = undefined;
       this.searchHits.clear();
       this.snap = undefined;
       this.handMoved = false;
       this.hiddenSig = '';
       this.layout.seedRadial();
+      // A graph shown with Time set (a load, undo or redo) solves at the share it shows.
+      this.reseedNext = this.timeKeep !== undefined && this.mode !== 'focus';
     }
     this.renderNodes();
     const seeds = seedIds.map((id) => this.byId.get(id)).filter((n): n is SimNode => !!n);
@@ -220,8 +225,16 @@ export class GraphView {
     if (mode === 'focus' && was !== 'focus') {
       this.snap = this.layout.focusSnap();
       this.snapView = d3.zoomTransform(this.svg.node()!);
+      this.snapTime = this.timeKeep;
     }
     this.layout.focusMode = mode === 'focus';
+    // A Time change inside Focus made the saved layout stale: re-solve from the seed instead.
+    if (was === 'focus' && mode !== 'focus' && this.snap && this.snapTime !== this.timeKeep) {
+      this.snap = undefined;
+      this.reseedNext = true;
+      this.applyScope('solve');
+      return;
+    }
     if (was === 'focus' && mode !== 'focus' && this.snap) {
       const snap = this.snap;
       this.snap = undefined;
@@ -246,27 +259,44 @@ export class GraphView {
     this.applyScope('solve');
   }
 
-  // Vizster X-ray: photos off so the attribute color reads.
-  setXray(x: Xray): void {
-    this.xray = x;
-    this.svg.classed('xray', x !== 'community');
-    this.paint();
-    this.legend();
-  }
-
   setHulls(on: boolean): void {
     this.hullsOn = on;
     this.hullG.attr('display', on ? 'inline' : 'none');
     if (on) this.drawHulls();
   }
 
-  setPull(v: number): void {
-    this.layout.setPull(v);
-  }
-
   setLinkShow(show: LinkShow): void {
     this.linkShow = { ...show };
     this.drawLinks();
+  }
+
+  // Time hides accounts and re-solves the layout around the rest, as a scope change does.
+  setTimeKeep(keep: 'unposted' | number | undefined): void {
+    this.timeKeep = keep;
+    this.reseedNext = this.mode !== 'focus';
+    this.applyScope('solve');
+  }
+
+  // Last casts arrive after the graph draws, in batches; with Time set, one re-solve after they go quiet.
+  setCasts(entries: Iterable<[string, number | null]>): void {
+    for (const [id, t] of entries) {
+      const n = this.byId.get(id);
+      if (n) n.lastCast = t;
+    }
+    if (this.timeKeep === undefined) return;
+    clearTimeout(this.castsTimer);
+    this.castsTimer = window.setTimeout(() => {
+      this.reseedNext = this.mode !== 'focus';
+      this.applyScope('solve');
+    }, CASTS_QUIET_MS);
+  }
+
+  // Hidden by Time; the ego, the selection and an account not read yet always show.
+  private aged(n: SimNode): boolean {
+    const keep = this.timeKeep;
+    if (keep === undefined || n.hop === 0 || n.id === this.focusId || n.lastCast === undefined) return false;
+    if (keep === 'unposted') return n.lastCast !== null;
+    return n.lastCast === null || Date.now() - n.lastCast > keep;
   }
 
   // Seen from `end` by the Links row; a link seen from neither end (the dim background) is mutual or one-way.
@@ -385,8 +415,12 @@ export class GraphView {
     this.nodeSel?.style('display', (n) => (vset.has(n.id) ? null : 'none'));
     if (how === 'restore' && snap) this.layout.focusRestore(snap, vis, vlinks);
     else if (how === 'local') this.layout.reheatLocal(vis, vlinks, seeds);
-    else if (changed) this.layout.solveFit(vis, vlinks, (to) => this.fitTo([...to.entries()].map(([n, [x, y]]) => [x, y, n.r] as const), true));
-    else this.layout.bindQuiet(vis, vlinks);
+    else if (changed) {
+      const from = this.reseedNext ? new Map(this.nodes.map((n) => [n, [n.x ?? 0, n.y ?? 0] as [number, number]])) : undefined;
+      if (from) this.layout.reseed(vis);
+      this.layout.solveFit(vis, vlinks, (to) => this.fitTo([...to.entries()].map(([n, [x, y]]) => [x, y, n.r] as const), true), from);
+    } else this.layout.bindQuiet(vis, vlinks);
+    this.reseedNext = false;
     this.paint();
     // Hulls follow the scope (Context grays outside it); hover never changes them.
     if (this.hullsOn) this.drawHulls();
@@ -434,6 +468,7 @@ export class GraphView {
   }
 
   private visible(n: SimNode): boolean {
+    if (this.aged(n)) return false;
     if (this.mode === 'context') return true;
     return this.scope.has(n.id);
   }
@@ -481,25 +516,42 @@ export class GraphView {
         if (this.hoverId !== d.id) {
           this.hoverId = d.id;
           this.paint();
+          this.events.onHover(d);
         }
       })
       .on('pointerleave', (e: PointerEvent) => {
         if (e.pointerType !== 'mouse') return;
         clearTimeout(this.hoverTimer);
-        this.hoverTimer = window.setTimeout(() => {
-          this.hoverId = undefined;
-          this.paint();
-        }, HOVER_EXIT_MS);
+        this.hoverTimer = window.setTimeout(() => this.endHover(), HOVER_EXIT_MS);
       });
     sel.call(this.dragB);
     this.nodeSel = sel;
+  }
+
+  private endHover(): void {
+    this.hoverId = undefined;
+    this.paint();
+    this.events.onHover(undefined);
+  }
+
+  // The mouse on the panel: hold the hover it shows, start the exit delay, or end it now.
+  keepHover(on: boolean): void {
+    if (this.touchHover || !this.hoverId) return;
+    clearTimeout(this.hoverTimer);
+    if (!on) this.hoverTimer = window.setTimeout(() => this.endHover(), HOVER_EXIT_MS);
+  }
+
+  endHoverNow(): void {
+    if (this.touchHover || !this.hoverId) return;
+    clearTimeout(this.hoverTimer);
+    this.endHover();
   }
 
   private paint(): void {
     if (!this.nodeSel || !this.graph) return;
     const lit = this.litSet();
     const ctx = this.mode === 'context';
-    const color = this.colorFn();
+    const color = (d: SimNode) => this.communityColor(d.community);
     // Connectivity highlight (Vizster F5): hover, else the selection, lights hop 1 and hop 2.
     const src = this.hoverId ?? this.litFocus;
     this.near1 = new Set(src ? this.adj.get(src) : []);
@@ -550,23 +602,6 @@ export class GraphView {
     return this.touchHover ? undefined : this.focusId;
   }
 
-  private colorFn(): (d: SimNode) => string {
-    switch (this.xray) {
-      case 'hop':
-        return (d) => HOP_COLORS[d.hop];
-      case 'mutual':
-        return (d) => (d.hop === 0 ? HOP_COLORS[0] : TIE_COLORS[egoTie(d)]);
-      case 'followers': {
-        const deg = (d: SimNode) => this.adj.get(d.id)?.size ?? 0;
-        const max = d3.max(this.nodes, deg) ?? 1;
-        const scale = d3.scaleSequentialSqrt(d3.interpolatePlasma).domain([0, max]);
-        return (d) => scale(deg(d));
-      }
-      default:
-        return (d) => this.communityColor(d.community);
-    }
-  }
-
   private legend(): void {
     const el = document.getElementById('legend');
     if (!el || !this.graph) return;
@@ -578,21 +613,8 @@ export class GraphView {
       s.append(i, text);
       el.append(s);
     };
-    if (this.xray === 'community') {
-      const counts = d3.rollup(this.nodes.filter((n) => n.community >= 0), (v) => v.length, (n) => n.community);
-      [...counts.entries()].sort((a, b) => a[0] - b[0]).slice(0, 8).forEach(([c, n]) => item(this.communityColor(c), `#${c + 1} · ${n}`));
-    } else if (this.xray === 'hop') {
-      ['You', 'Your circle', 'Friends of friends', 'Expanded'].forEach((t, i) => item(HOP_COLORS[i], t));
-    } else if (this.xray === 'mutual') {
-      item(TIE_COLORS.mutual, 'Follow each other');
-      item(TIE_COLORS['follows-you'], 'Follows you');
-      item(TIE_COLORS['you-follow'], 'You follow');
-      item(TIE_COLORS.none, 'Neither');
-      item(TIE_COLORS.unread, 'Not read');
-    } else {
-      item(d3.interpolatePlasma(0.1), 'Few links here');
-      item(d3.interpolatePlasma(0.9), 'Many links here');
-    }
+    const counts = d3.rollup(this.nodes.filter((n) => n.community >= 0), (v) => v.length, (n) => n.community);
+    [...counts.entries()].sort((a, b) => a[0] - b[0]).slice(0, 8).forEach(([c, n]) => item(this.communityColor(c), `#${c + 1} · ${n}`));
   }
 
   // The single paint path for geometry (forces, flights, drags).
@@ -661,14 +683,21 @@ export class GraphView {
     else run();
   }
 
-  // Double click or tap is structural: expand an unexpanded node, else release its pin.
   private doubleTapNode(d: SimNode): void {
     clearTimeout(this.clickTimer);
-    if (!d.expanded) this.events.onExpand(d);
-    else if (d.pinned) {
-      this.layout.togglePin(d);
-      this.paint();
-    }
+    this.events.onCenter(d);
+  }
+
+  isPinned(id: string): boolean {
+    return !!this.byId.get(id)?.pinned;
+  }
+
+  // The profile's Unpin: the node rejoins the layout.
+  unpin(id: string): void {
+    const n = this.byId.get(id);
+    if (!n?.pinned || n.hop === 0) return;
+    this.layout.togglePin(n);
+    this.paint();
   }
 
   private tapBackground(): void {
@@ -698,6 +727,8 @@ export class GraphView {
   private scrub(id: string | undefined, at?: Pt, lifted?: boolean): void {
     clearTimeout(this.hoverTimer);
     const touching = at !== undefined;
+    // A finger takes over from a mouse hover: the panel goes back to the selection first.
+    if (touching && !this.touchHover && this.hoverId) this.events.onHover(undefined);
     if (this.hoverId !== id || this.touchHover !== touching) {
       this.hoverId = id;
       this.touchHover = touching;
