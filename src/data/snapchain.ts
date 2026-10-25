@@ -13,11 +13,13 @@ const FARCASTER_EPOCH_MS = Date.UTC(2021, 0, 1);
 type UserDataMessage = { data?: { userDataBody?: { type?: string; value?: string } } };
 type UserDataResponse = { messages?: UserDataMessage[] };
 
-export type SnapchainOptions = { base?: string; pageSize?: number; profileConcurrency?: number };
+// castCache: the site's last-cast cache (functions/api/lastcasts.ts); empty = none.
+export type SnapchainOptions = { base?: string; pageSize?: number; profileConcurrency?: number; castCache?: string };
 
 export function snapchainProvider(opts: SnapchainOptions = {}): DataProvider {
   const base = (opts.base ?? DEFAULT_HUB).replace(/\/$/, '');
   const pageSize = opts.pageSize ?? 500;
+  const castCache = opts.castCache ?? '/api/lastcasts';
   const profileConcurrency = opts.profileConcurrency ?? 8;
 
   const links = async (path: string, key: 'fid' | 'target_fid', fid: number, cursor?: string): Promise<{ res: LinkResponse }> => {
@@ -102,6 +104,15 @@ export function snapchainProvider(opts: SnapchainOptions = {}): DataProvider {
         throw err;
       }
     },
+    ...(castCache && {
+      async lastCasts(fids: number[]) {
+        const res = await fetch(castCache, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ fids }), signal: AbortSignal.timeout(15000) });
+        if (!res.ok) throw new HttpError(res.status, castCache);
+        const body = (await res.json()) as { casts?: Record<string, number | null>; missing?: number[] };
+        if (!body.casts || !Array.isArray(body.missing)) throw new Error('cast cache: bad answer');
+        return { casts: new Map(Object.entries(body.casts).map(([f, t]) => [Number(f), t])), missing: body.missing };
+      },
+    }),
     async lastCast(fid) {
       const r = await getJson<CastResponse>(`${base}/v1/castsByFid?${new URLSearchParams({ fid: String(fid), pageSize: '1', reverse: 'true' })}`);
       const ts = r.messages?.[0]?.data?.timestamp;

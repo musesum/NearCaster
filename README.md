@@ -66,11 +66,25 @@ How the crawl works (`src/data/crawl.ts`, budget `DEFAULT_BUDGET`):
 
 Link colours show which way each follow goes. Links to you are seen from you; when an account is hovered, previewed or selected, its links are seen from it: yellow = both follow each other, green = a follower only, blue = followed only, gray = one way seen and the return never read (friends of friends' own follow lists are not read, and lists over 500 are read in part). Other links stay dim gray (mutual ones brighter). Controls, Links: Mutual (yellow), Following (blue) and Follows (green) each switch their links on or off and fill with their colour while on (seen from the same end as the colour; a dim one-way link shows while either Following or Follows is on). All, a separate gradient button, switches all three back on. Accounts always take their community colour.
 
-Controls, Time shows accounts by their last cast. The left end shows only accounts that never cast; past a tick, `01m` through hours, days, weeks and months to `10y` (two digits and one letter: m h d w M y, exponential steps) shows accounts that cast within that window; the right end shows everyone. You, the selected account, and an account whose last cast is not read yet always show. Each Time value re-solves the layout around the accounts it shows (150 ms after the slider stops); outside Focus the re-solve starts from the radial seed, so one value always gives one layout, and the bands shrink with the square root of the share shown (never below 35 % of their spacing), so a sparse set sits close together. In Focus, Time hides accounts inside the depth ball; in Context, the hidden accounts leave and the rest gray as before. Last casts (`/v1/castsByFid?fid=&pageSize=1&reverse=true`, one request per account) load after the graph draws, six at a time, starting with you; on the first load Time starts at the window since your own last cast (everyone, if you never cast).
+Controls, Time shows accounts by their last cast. The left end shows only accounts that never cast; past a tick, `01m` through hours, days, weeks and months to `10y` (two digits and one letter: m h d w M y, exponential steps) shows accounts that cast within that window; the right end shows everyone. You, the selected account, and an account whose last cast is not read yet always show. Each Time value re-solves the layout around the accounts it shows (150 ms after the slider stops); outside Focus the re-solve starts from the radial seed, so one value always gives one layout, and the bands shrink with the square root of the share shown (never below 35 % of their spacing), so a sparse set sits close together. In Focus, Time hides accounts inside the depth ball; in Context, the hidden accounts leave and the rest gray as before. Last casts load after the graph draws, from the site's last-cast cache (below), else from the hub one account at a time (`/v1/castsByFid?fid=&pageSize=1&reverse=true`, six at a time), starting with you; on the first load Time starts at the window since your own last cast (everyone, if you never cast).
 
 Every cap the crawl hits is listed in the Controls caption.
 
 Cost: one load for fid 3 (dwr) took about 6 to 13 s and about 16 MB. The links are uncompressed (about 490 B each), which is the main mobile cost.
+
+## Last-cast cache
+
+`functions/api/lastcasts.ts` is a Cloudflare Pages Function on the same site, backed by the D1 database `nearcaster-cache` (`wrangler.toml`, table in `migrations/`). It stays within Cloudflare's free plan.
+
+1. The app sends up to 500 fids: `POST /api/lastcasts {"fids": [...]}`.
+2. The function answers fresh rows from D1. A row stays fresh for 1 hour when the account cast within the last day, 12 hours when it cast earlier, and 24 hours when it never cast.
+3. It reads at most 40 stale or unknown fids from the hub per request (the free plan allows 50 subrequests), saves them in one batch, and returns the rest as `missing`.
+4. The app sends the missing fids again, 40 per request, until all are answered.
+5. If a request to the cache fails (an error, a free-plan limit, or no function, as under `npm run dev`), the app stops using it for the session and reads the hub directly.
+
+Every visitor shares the cache, so accounts in many circles are read from the hub about once an hour at most. One fid 3 load measured: about 25 s of hub reads without the cache, 0.97 s with a warm cache.
+
+Deploy from the project folder so the function and its D1 binding go up with the site: `npm run build`, then `npx wrangler pages deploy --branch main`. Create the table once with `npx wrangler d1 migrations apply nearcaster-cache --remote`.
 
 ## Mini app publishing
 
@@ -122,5 +136,6 @@ src/graph/touch.ts     touch: one-finger scrub preview, two-finger zoom and pan
 src/ui/panel.ts        profile panel
 src/ui/peek.ts         scrub preview card
 src/ui/near.ts         "Near you" ranking
+functions/api/         last-cast cache (Cloudflare Pages Function + D1)
 vite.config.ts         manifest + embed plugin, tunnel hosts
 ```

@@ -1,0 +1,10 @@
+# Cloudflare Pages: the built site plus functions/ (the last-cast cache, bound to D1 as DB).
+name = "nearcaster"
+pages_build_output_dir = "dist"
+compatibility_date = "2025-09-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "nearcaster-cache"
+database_id = "b3f0ea9c-57c9-4c29-8698-0b4a71b71d65"
+migrations_dir = "migrations"

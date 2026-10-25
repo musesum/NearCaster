@@ -27,6 +27,9 @@ class EmptyGraphError extends Error {}
 // A username stub ("fid:N") is not a real mention or profile path.
 // Graphs undo can step back through.
 const HISTORY_MAX = 20;
+// Last-cast cache: fids per request, and per follow-up request (the misses it reads from the hub).
+const CACHE_BATCH = 500;
+const CACHE_MISSES = 40;
 const handleOf = (n: GNode) => (n.username.startsWith('fid:') ? `fid ${n.fid}` : `@${n.username}`);
 
 async function boot(): Promise<void> {
@@ -113,7 +116,7 @@ async function boot(): Promise<void> {
     cover(0);
   }
 
-  // The arrow row and hover previews change the sheet's height; the cover follows (a browse holds the height).
+  // The arrow row and hover previews change the sheet's height; the cover follows (it holds during a finger browse).
   new ResizeObserver(() => {
     if ($('panel').hidden || browseFrom) return;
     const top = syncCover();
@@ -131,12 +134,12 @@ async function boot(): Promise<void> {
     if (e.pointerType === 'mouse') view.keepHover(false);
   });
 
-  // The sheet's height holds while browsing (a longer profile scrolls), so its edge, the cover and the fit button stay put.
+  // The sheet fits each preview (a held height left a blank area under a short one); the cover and
+  // the fit button hold until the browse ends.
   function browse(node: GNode, graph: EgoGraph): void {
     if (!browseFrom) {
       browseFrom = panel.openId;
       browseGraph = graph;
-      $('panel').style.height = `${$('panel').offsetHeight}px`;
     }
     browsed = node.id;
     panel.show(node, graph, view.communityColor, true);
@@ -145,7 +148,6 @@ async function boot(): Promise<void> {
   // Forgets a browse without touching the sheet's content.
   function dropBrowse(): void {
     browseFrom = browsed = browseGraph = undefined;
-    $('panel').style.height = '';
   }
 
   // A clean lift selects the account the sheet shows; a second finger or a cancel puts the sheet back.
@@ -312,6 +314,10 @@ async function boot(): Promise<void> {
   let timeDefaulted = false;
   // Accounts already asked, so a second read (an expand) skips them.
   const castAsked = new WeakSet<GNode>();
+  // The site's last-cast cache answers until a request to it fails.
+  let castCacheUp = true;
+  // Rounds in a row with a failed request; two turn the cache off for the session.
+  let castCacheFails = 0;
   async function readCasts(graph: EgoGraph): Promise<void> {
     const provider = state.provider;
     const todo = graph.nodes.filter((n) => n.lastCast === undefined && !castAsked.has(n)).sort((a, b) => a.hop - b.hop);
@@ -321,22 +327,66 @@ async function boot(): Promise<void> {
       flushT = 0;
       if (state.graph === graph) view.setCasts(ready.splice(0));
     };
-    await pool(todo, DEFAULT_BUDGET.concurrency, async (n) => {
-      // A load in flight gets the hub to itself.
-      if (state.graph !== graph || state.loading || castAsked.has(n)) return;
-      castAsked.add(n);
-      n.lastCast = await provider.lastCast(n.fid);
-      ready.push([n.id, n.lastCast]);
+    const got = (n: GNode, t: number | null) => {
+      n.lastCast = t;
+      ready.push([n.id, t]);
       if (n.id === graph.egoId) {
         flush();
         if (!timeDefaulted) {
           timeDefaulted = true;
-          time.setDefault(n.lastCast === null ? AGE_STEPS : stepFor(Date.now() - n.lastCast));
+          time.setDefault(t === null ? AGE_STEPS : stepFor(Date.now() - t));
         }
       } else if (!flushT) flushT = window.setTimeout(flush, 250);
+    };
+    // The ego's own read sets Time's default, so it goes straight to the hub beside the cache rounds.
+    const cached = castCacheUp && !!provider.lastCasts;
+    const ego = cached ? todo.find((n) => n.id === graph.egoId) : undefined;
+    if (ego) castAsked.add(ego);
+    const egoRead = ego ? provider.lastCast(ego.fid).then((t) => got(ego, t), () => castAsked.delete(ego)) : undefined;
+    const rest = cached ? await readCached(graph, todo.filter((n) => n !== ego), provider, got) : todo;
+    await egoRead;
+    if (ego && ego.lastCast === undefined) rest.push(ego);
+    await pool(rest, DEFAULT_BUDGET.concurrency, async (n) => {
+      // A load in flight gets the hub to itself.
+      if (state.graph !== graph || state.loading || castAsked.has(n)) return;
+      castAsked.add(n);
+      got(n, await provider.lastCast(n.fid));
     });
     clearTimeout(flushT);
     flush();
+  }
+
+  // The site's cache answers big batches; what it leaves missing goes back in small batches it can read
+  // from the hub (CACHE_MISSES each). A failing cache is dropped for the session and the hub is read directly.
+  // Returns the accounts still unanswered.
+  async function readCached(graph: EgoGraph, todo: GNode[], provider: DataProvider, got: (n: GNode, t: number | null) => void): Promise<GNode[]> {
+    const byFid = new Map(todo.map((n) => [n.fid, n]));
+    for (const n of todo) castAsked.add(n);
+    let want = todo.map((n) => n.fid);
+    let size = CACHE_BATCH;
+    while (want.length && castCacheUp && state.graph === graph && !state.loading) {
+      const parts: number[][] = [];
+      for (let i = 0; i < want.length; i += size) parts.push(want.slice(i, i + size));
+      const answers = await pool(parts, DEFAULT_BUDGET.concurrency, (p) => provider.lastCasts!(p));
+      castCacheFails = answers.some((a) => !a) ? castCacheFails + 1 : 0;
+      if (castCacheFails >= 2) castCacheUp = false;
+      const next: number[] = [];
+      answers.forEach((a, i) => {
+        if (!a) return next.push(...parts[i]);
+        for (const [fid, t] of a.casts) {
+          const n = byFid.get(fid);
+          if (n) got(n, t);
+        }
+        next.push(...a.missing);
+      });
+      // A follow-up round that answers under a quarter means the hub is failing: read the rest directly.
+      if (next.length >= want.length || (size === CACHE_MISSES && want.length - next.length < want.length / 4)) break;
+      want = next;
+      size = CACHE_MISSES;
+    }
+    const left = want.map((f) => byFid.get(f)!).filter((n) => n.lastCast === undefined);
+    for (const n of left) castAsked.delete(n);
+    return left;
   }
 
   // Dev-only probe for harness checks.
@@ -427,7 +477,6 @@ async function boot(): Promise<void> {
       hidePanel();
       runSearch();
       sourceCaption(graph);
-      void readCasts(graph);
       // A fallback keeps the asked-for URL, so a reload retries live data.
       if (!fellBack) markUrl(fid);
     } catch (e) {
@@ -436,13 +485,13 @@ async function boot(): Promise<void> {
       if (state.graph) {
         setStatus('');
         toast(msg);
-        // The kept graph's reads stopped for this load.
-        void readCasts(state.graph);
       } else setStatus(msg, undefined, true);
     } finally {
       state.loading = false;
       syncMe();
     }
+    // Last casts read once the load is over (reads pause while one runs): the new graph's, or the kept one's.
+    if (state.graph) void readCasts(state.graph);
   }
 
   const urlFid = Number(params.get('fid'));

@@ -26,6 +26,8 @@ export interface DataProvider {
   fidByName(name: string): Promise<number | undefined>;
   // When the account last cast (unix ms); null = never.
   lastCast(fid: number): Promise<number | null>;
+  // Many last casts in one request (the site's cache); `missing` = fids it did not answer this time.
+  lastCasts?(fids: number[]): Promise<{ casts: Map<number, number | null>; missing: number[] }>;
 }
 
 // hop 0 = ego, 1 = your circle (ego follows it or it follows ego), 2 = friend of a friend, 3 = reached by expanding a hop-2 node.
